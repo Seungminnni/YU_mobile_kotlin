@@ -18,6 +18,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -133,7 +134,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
-                super.onPageFinished(view, url, favicon)
+                super.onPageFinished(view, url)
 
                 // 피처 추출 실행 (JavaScript 활성화된 경우에만)
                 if (webView.settings.javaScriptEnabled) {
@@ -207,13 +208,13 @@ class MainActivity : AppCompatActivity() {
 
                 JavaScript를 활성화하시겠습니까?
             """.trimIndent())
-            .setPositiveButton("JavaScript 활성화") { _, _ ->
+            .setPositiveButton("JavaScript 활성화") { dialog: android.content.DialogInterface?, which: Int ->
                 enableJavaScriptAndLoad(url)
             }
-            .setNegativeButton("보안 모드로 진행") { _, _ ->
+            .setNegativeButton("보안 모드로 진행") { dialog: android.content.DialogInterface?, which: Int ->
                 loadInSecureMode(url)
             }
-            .setNeutralButton("취소") { dialog, _ ->
+            .setNeutralButton("취소") { dialog: android.content.DialogInterface?, which: Int ->
                 dialog.dismiss()
             }
             .setCancelable(false)
@@ -291,7 +292,7 @@ class MainActivity : AppCompatActivity() {
                             val rawValue = barcode.rawValue
                             runOnUiThread {
                                 currentUrl = rawValue
-                                if (isValidUrl(rawValue)) {
+                                if (rawValue != null && isValidUrl(rawValue)) {
                                     resultTextView.text = """
                                         🌐 URL 감지됨: $rawValue
                                         🔒 가상환경에서 안전하게 실행됩니다
@@ -409,11 +410,11 @@ class MainActivity : AppCompatActivity() {
 
                 정말로 계속하시겠습니까?
             """.trimIndent())
-            .setPositiveButton("계속하기 (위험)") { _, _ ->
+            .setPositiveButton("계속하기 (위험)") { dialog: android.content.DialogInterface?, which: Int ->
                 // 사용자가 위험을 감수하고 계속하기로 선택
                 Toast.makeText(this, "⚠️ 주의: 피싱 의심 사이트입니다", Toast.LENGTH_LONG).show()
             }
-            .setNegativeButton("닫기 (권장)") { _, _ ->
+            .setNegativeButton("닫기 (권장)") { dialog: android.content.DialogInterface?, which: Int ->
                 toggleView() // 카메라 뷰로 돌아가기
             }
             .setCancelable(false)
