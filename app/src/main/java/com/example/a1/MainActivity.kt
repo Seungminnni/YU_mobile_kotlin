@@ -215,7 +215,7 @@ class MainActivity : AppCompatActivity() {
                 loadInSecureMode(url)
             }
             .setNeutralButton("취소") { dialog: android.content.DialogInterface?, which: Int ->
-                dialog.dismiss()
+                dialog!!.dismiss()
             }
             .setCancelable(false)
             .show()
