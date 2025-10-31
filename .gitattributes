@@ -1,3 +1,4 @@
+phishing/**/* filter=lfs diff=lfs merge=lfs -text
 phishing/last.csv filter=lfs diff=lfs merge=lfs -text
 phishing/test_not-phishing.csv filter=lfs diff=lfs merge=lfs -text
 phishing/test_phishing.csv filter=lfs diff=lfs merge=lfs -text
