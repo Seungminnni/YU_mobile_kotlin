@@ -36,6 +36,7 @@ import java.net.URI
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import android.content.Context
 
 class MainActivity : AppCompatActivity() {
 
@@ -77,7 +78,7 @@ class MainActivity : AppCompatActivity() {
         setupWebView()
 
         // 피싱 탐지 모듈 초기화
-        phishingDetector = PhishingDetector()
+        phishingDetector = PhishingDetector(this)
 
         // 토글 버튼 클릭 리스너
         toggleButton.setOnClickListener {
@@ -681,7 +682,9 @@ data class WebFeatures(
 )
 
 // 논문에서 제안하는 규칙 기반 피싱 탐지 시스템
-class PhishingDetector {
+class PhishingDetector(private val context: Context) {
+
+    private val mlPredictor = TFLitePhishingPredictor(context)
 
     // 피싱 탐지 규칙들 (논문 기반)
     private val PHISHING_RULES = mapOf(
@@ -768,16 +771,40 @@ class PhishingDetector {
         return result.confidenceScore >= threshold
     }
 
-    // 피싱 분석 결과 생성 (DOM + URL 결합)
+    // 피싱 분석 결과 생성 (DOM + URL 결합 + ML 하이브리드)
     fun analyzePhishing(features: WebFeatures, url: String? = null): PhishingAnalysisResult {
         val featureScore = calculatePhishingScore(features)
         val riskFactors = collectFeatureRiskFactors(features)
         val urlHeuristics = url?.let { evaluateUrlHeuristics(it) }
 
-        val combinedScore = urlHeuristics?.let { combineScores(featureScore, it.score) } ?: featureScore
+        // ML 예측 수행
+        val mlPrediction = mlPredictor.predictWithML(features)
+        val mlScore = if (mlPrediction >= 0.0f) {
+            mlPrediction.toDouble() // ML 예측 성공
+        } else {
+            featureScore // ML 예측 실패 시 규칙 기반 점수 사용
+        }
+
+        // 하이브리드 점수 계산: 규칙 기반 + ML 예측 결합
+        val hybridScore = if (mlPrediction >= 0.0f) {
+            // ML 예측이 성공한 경우: 규칙 기반(40%) + ML(60%) 결합
+            (featureScore * 0.4) + (mlScore * 0.6)
+        } else {
+            // ML 예측 실패 시 규칙 기반 점수만 사용
+            featureScore
+        }
+
+        val combinedScore = urlHeuristics?.let { combineScores(hybridScore, it.score) } ?: hybridScore
 
         if (urlHeuristics != null) {
             riskFactors.addAll(urlHeuristics.riskFactors)
+        }
+
+        // ML 예측 정보 추가
+        if (mlPrediction >= 0.0f) {
+            riskFactors.add("ML 예측 점수: ${(mlScore * 100).toInt()}%")
+        } else {
+            riskFactors.add("ML 모델 로드 실패 - 규칙 기반 분석만 수행")
         }
 
         return PhishingAnalysisResult(
