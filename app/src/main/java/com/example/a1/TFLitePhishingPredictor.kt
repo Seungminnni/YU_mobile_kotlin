@@ -103,26 +103,11 @@ class TFLitePhishingPredictor(private val context: Context) {
      * WebFeatures를 모델이 기대하는 float array로 변환
      */
     private fun webFeaturesToFloatArray(features: WebFeatures): FloatArray {
-        // feature_info.json에 정의된 피처 순서대로 변환
-        val featureMap = mapOf(
-            "dom_node_count" to features.domNodeCount.toFloat(),
-            "iframe_count" to features.iframeCount.toFloat(),
-            "external_domain_form_count" to features.externalDomainFormCount.toFloat(),
-            "base64_script_count" to features.base64ScriptCount.toFloat(),
-            "event_listener_count" to features.eventListenerCount.toFloat(),
-            "suspicious_script_count" to features.suspiciousScriptCount.toFloat(),
-            "redirect_chain_length" to features.redirectChainLength.toFloat(),
-            "has_login_form" to if (features.hasLoginForm) 1.0f else 0.0f,
-            "has_credit_card_form" to if (features.hasCreditCardForm) 1.0f else 0.0f,
-            "url_length" to features.urlLength.toFloat(),
-            "special_char_count" to features.specialCharCount.toFloat()
-        )
-
         // 모델이 기대하는 피처 순서대로 배열 생성
         val inputArray = FloatArray(featureColumns.size)
         for (i in featureColumns.indices) {
             val featureName = featureColumns[i]
-            inputArray[i] = featureMap[featureName] ?: 0.0f
+            inputArray[i] = features[featureName] ?: 0.0f
         }
 
         Log.d(TAG, "입력 피처 배열: ${inputArray.joinToString(", ")}")

@@ -213,7 +213,7 @@ class MainActivity : AppCompatActivity() {
                 $url
 
                 🔒 가상환경에서 실행됩니다:
-                • JavaScript가 기본적으로 비활성화됨
+                • JavaScript가 활성화되어 ML 분석 수행
                 • 외부 리소스 접근이 제한됨
                 • 파일 시스템 접근이 차단됨
                 • 위치 정보 접근이 비활성화됨
@@ -223,15 +223,12 @@ class MainActivity : AppCompatActivity() {
                 • 개인정보를 입력하지 마세요
                 • 의심스러운 링크는 피하세요
 
-                JavaScript를 활성화하시겠습니까?
+                ML 기반 피싱 분석을 수행하시겠습니까?
             """.trimIndent())
-            .setPositiveButton("JavaScript 활성화") { dialog: android.content.DialogInterface?, which: Int ->
+            .setPositiveButton("ML 분석 수행") { dialog: android.content.DialogInterface?, which: Int ->
                 enableJavaScriptAndLoad(url)
             }
-            .setNegativeButton("보안 모드로 진행") { dialog: android.content.DialogInterface?, which: Int ->
-                loadInSecureMode(url)
-            }
-            .setNeutralButton("취소") { dialog: android.content.DialogInterface?, which: Int ->
+            .setNegativeButton("취소") { dialog: android.content.DialogInterface?, which: Int ->
                 dialog!!.dismiss()
             }
             .setCancelable(false)
@@ -248,19 +245,6 @@ class MainActivity : AppCompatActivity() {
         webView.settings.javaScriptEnabled = true
         webView.settings.domStorageEnabled = true
         resultTextView.text = "⚠️ JavaScript가 활성화된 가상환경에서 로드 중..."
-        webView.loadUrl(url)
-    }
-
-    private fun loadInSecureMode(url: String) {
-        // WebView 표시 설정
-        previewView.visibility = View.GONE
-        webView.visibility = View.VISIBLE
-        toggleButton.text = "카메라로 전환"
-        isWebViewVisible = true
-
-        webView.settings.javaScriptEnabled = false
-        webView.settings.domStorageEnabled = false
-        renderAnalysis(phishingDetector.analyzeUrlOnly(url))
         webView.loadUrl(url)
     }
 
@@ -310,15 +294,8 @@ class MainActivity : AppCompatActivity() {
                             runOnUiThread {
                                 currentUrl = rawValue
                                 if (rawValue != null && isValidUrl(rawValue)) {
-                                    val quickAnalysis = phishingDetector.analyzeUrlOnly(rawValue)
-                                    renderAnalysis(quickAnalysis, allowModal = false)
-                                    if (!isWebViewVisible) {
-                                        resultTextView.append(
-                                            "\n\n🔒 가상환경에서 검증하려면 '웹뷰로 전환' 버튼을 눌러주세요."
-                                        )
-                                    }
-                                    toggleButton.visibility = View.VISIBLE
-                                    toggleButton.text = "🔒 가상환경에서 열기"
+                                    // QR 스캔 후 바로 WebView 전환 (ML 분석을 위해)
+                                    showVirtualEnvironmentWarning(rawValue)
                                 } else {
                                     resultTextView.text = "📄 QR 코드 결과: $rawValue"
                                     toggleButton.visibility = View.GONE
@@ -370,15 +347,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderAnalysis(analysisResult: PhishingAnalysisResult, allowModal: Boolean = true) {
-        val modeDescription = when (analysisResult.analysisMode) {
-            AnalysisMode.FULL -> "DOM + URL 결합 분석"
-            AnalysisMode.DOM_ONLY -> "DOM 기반 분석"
-            AnalysisMode.URL_ONLY -> "URL 기반 간소 분석"
-        }
+        val modeDescription = "ML 기반 통합 분석"
         val targetUrl = analysisResult.inspectedUrl ?: currentUrl
 
         val resultText = StringBuilder().apply {
-            append("🔍 피싱 분석 결과\n")
+            append("🤖 ML 기반 피싱 분석 결과\n")
             append("━━━━━━━━━━━━━━━━━━━━\n")
             append("📊 신뢰도 점수: ${(analysisResult.confidenceScore.coerceIn(0.0, 1.0) * 100).toInt()}%\n")
             append("🎯 판정 결과: ${if (analysisResult.isPhishing) "🚨 피싱 의심" else "✅ 안전"}\n")
@@ -387,36 +360,33 @@ class MainActivity : AppCompatActivity() {
                 append("🌐 분석 URL: $it\n")
             }
 
-            if (analysisResult.analysisMode == AnalysisMode.URL_ONLY) {
-                append("\nℹ️ JavaScript 비활성화로 인해 DOM 기반 상세 분석이 제한되었습니다.\n")
-            }
-
             val features = analysisResult.features
             if (features != null) {
-                append("\n📋 주요 피처:\n")
-                append("• DOM 노드 수: ${features.domNodeCount}\n")
-                append("• iframe 개수: ${features.iframeCount}\n")
-                append("• 외부 도메인 form: ${features.externalDomainFormCount}\n")
-                append("• base64 스크립트: ${features.base64ScriptCount}\n")
-                append("• 이벤트 리스너: ${features.eventListenerCount}\n")
-                append("• 의심스러운 스크립트: ${features.suspiciousScriptCount}\n")
-                append("• 로그인 폼: ${if (features.hasLoginForm) "있음" else "없음"}\n")
-                append("• 신용카드 폼: ${if (features.hasCreditCardForm) "있음" else "없음"}\n")
-                append("• URL 길이: ${features.urlLength}\n")
-                append("• 특수문자 수: ${features.specialCharCount}\n")
-            } else if (targetUrl != null) {
-                val specialCharCount = targetUrl.count { !it.isLetterOrDigit() }
-                append("\n🔗 URL 메트릭:\n")
-                append("• URL 길이: ${targetUrl.length}\n")
-                append("• 특수문자 수: $specialCharCount\n")
+                append("\n📋 WebView 피처 분석:\n")
+                append("• DOM 노드 수: ${features["domNodeCount"]?.toInt() ?: 0}\n")
+                append("• iframe 개수: ${features["iframeCount"]?.toInt() ?: 0}\n")
+                append("• 외부 도메인 form: ${features["externalDomainFormCount"]?.toInt() ?: 0}\n")
+                append("• base64 스크립트: ${features["base64ScriptCount"]?.toInt() ?: 0}\n")
+                append("• 이벤트 리스너: ${features["eventListenerCount"]?.toInt() ?: 0}\n")
+                append("• 의심스러운 스크립트: ${features["suspiciousScriptCount"]?.toInt() ?: 0}\n")
+                append("• 로그인 폼: ${if (features["hasLoginForm"] == 1.0f) "있음" else "없음"}\n")
+                append("• 신용카드 폼: ${if (features["hasCreditCardForm"] == 1.0f) "있음" else "없음"}\n")
+                append("• URL 길이: ${features["urlLength"]?.toInt() ?: 0}\n")
+                append("• 특수문자 수: ${features["specialCharCount"]?.toInt() ?: 0}\n")
             }
 
             if (analysisResult.riskFactors.isNotEmpty()) {
-                append("\n⚠️ 위험 요인:\n")
+                append("\n⚠️ ML 분석 결과:\n")
                 analysisResult.riskFactors.distinct().forEach { factor ->
                     append("• $factor\n")
                 }
             }
+
+            append("\n💡 시스템 특징:\n")
+            append("• 온-디바이스 ML 모델 사용\n")
+            append("• 외부 서버 통신 없음\n")
+            append("• WebView 기반 행위 분석\n")
+            append("• 실시간 프라이버시 보호\n")
 
             append("\n💡 권장사항:\n")
             if (analysisResult.isPhishing) {
@@ -446,10 +416,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun showPhishingWarningDialog(analysisResult: PhishingAnalysisResult) {
         val messageBuilder = StringBuilder().apply {
-            append("이 웹페이지는 피싱으로 의심됩니다!\n\n")
-            append("📊 신뢰도: ${(analysisResult.confidenceScore.coerceIn(0.0, 1.0) * 100).toInt()}%\n\n")
+            append("🚨 ML 모델이 이 웹페이지를 피싱으로 분석했습니다!\n\n")
+            append("📊 ML 신뢰도: ${(analysisResult.confidenceScore.coerceIn(0.0, 1.0) * 100).toInt()}%\n\n")
+            append("🤖 분석 방식:\n")
+            append("• 온-디바이스 머신러닝 모델\n")
+            append("• WebView 기반 행위 분석\n")
+            append("• 실시간 피처 추출 및 판정\n\n")
             if (analysisResult.riskFactors.isNotEmpty()) {
-                append("⚠️ 발견된 위험 요인:\n")
+                append("⚠️ ML 분석 근거:\n")
                 analysisResult.riskFactors.distinct().forEach { factor ->
                     append("• $factor\n")
                 }
@@ -464,11 +438,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         AlertDialog.Builder(this)
-            .setTitle("🚨 피싱 경고!")
+            .setTitle("🚨 ML 기반 피싱 경고!")
             .setMessage(messageBuilder.toString())
             .setPositiveButton("계속하기 (위험)") { dialog: android.content.DialogInterface?, which: Int ->
                 // 사용자가 위험을 감수하고 계속하기로 선택
-                Toast.makeText(this, "⚠️ 주의: 피싱 의심 사이트입니다", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "⚠️ 주의: ML 모델이 피싱으로 판정한 사이트입니다", Toast.LENGTH_LONG).show()
             }
             .setNegativeButton("닫기 (권장)") { dialog: android.content.DialogInterface?, which: Int ->
                 toggleView() // 카메라 뷰로 돌아가기
@@ -496,19 +470,17 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
     fun receiveFeatures(featuresJson: String) {
         try {
             val jsonObject = JSONObject(featuresJson)
-            val features = WebFeatures(
-                domNodeCount = jsonObject.getInt("domNodeCount"),
-                iframeCount = jsonObject.getInt("iframeCount"),
-                externalDomainFormCount = jsonObject.getInt("externalDomainFormCount"),
-                base64ScriptCount = jsonObject.getInt("base64ScriptCount"),
-                eventListenerCount = jsonObject.getInt("eventListenerCount"),
-                suspiciousScriptCount = jsonObject.getInt("suspiciousScriptCount"),
-                redirectChainLength = jsonObject.getInt("redirectChainLength"),
-                hasLoginForm = jsonObject.getBoolean("hasLoginForm"),
-                hasCreditCardForm = jsonObject.getBoolean("hasCreditCardForm"),
-                urlLength = jsonObject.getInt("urlLength"),
-                specialCharCount = jsonObject.getInt("specialCharCount")
-            )
+            val features = mutableMapOf<String, Float>()
+            val keys = jsonObject.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val value = jsonObject.get(key)
+                features[key] = when (value) {
+                    is Number -> value.toFloat()
+                    is Boolean -> if (value) 1.0f else 0.0f
+                    else -> 0.0f
+                }
+            }
             callback(features)
         } catch (e: Exception) {
             Log.e("WebFeatureExtractor", "피처 파싱 실패", e)
@@ -627,20 +599,112 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     var urlLength = url.length;
                     var specialCharCount = (url.match(/[^a-zA-Z0-9]/g) || []).length;
 
-                    // 결과 객체 생성
-                    var features = {
-                        domNodeCount: domNodeCount,
-                        iframeCount: iframeCount,
-                        externalDomainFormCount: externalDomainFormCount,
-                        base64ScriptCount: base64ScriptCount,
-                        eventListenerCount: eventListenerCount,
-                        suspiciousScriptCount: suspiciousScriptCount,
-                        redirectChainLength: redirectChainLength,
-                        hasLoginForm: hasLoginForm,
-                        hasCreditCardForm: hasCreditCardForm,
-                        urlLength: urlLength,
-                        specialCharCount: specialCharCount
-                    };
+                    // 87개 피처 계산 (가능한 것만 구현, 어려운 것은 0)
+                    var features = {};
+
+                    // URL 기반 피처
+                    features.length_url = url.length;
+                    features.length_hostname = window.location.hostname.length;
+                    features.ip = /^(\d{1,3}\.){3}\d{1,3}$/.test(window.location.hostname) ? 1 : 0;
+                    features.nb_dots = (url.match(/\./g) || []).length;
+                    features.nb_hyphens = (url.match(/-/g) || []).length;
+                    features.nb_at = (url.match(/@/g) || []).length;
+                    features.nb_qm = (url.match(/\?/g) || []).length;
+                    features.nb_and = (url.match(/&/g) || []).length;
+                    features.nb_or = (url.match(/\|/g) || []).length; // | 문자
+                    features.nb_eq = (url.match(/=/g) || []).length;
+                    features.nb_underscore = (url.match(/_/g) || []).length;
+                    features.nb_tilde = (url.match(/~/g) || []).length;
+                    features.nb_percent = (url.match(/%/g) || []).length;
+                    features.nb_slash = (url.match(/\//g) || []).length;
+                    features.nb_star = (url.match(/\*/g) || []).length;
+                    features.nb_colon = (url.match(/:/g) || []).length;
+                    features.nb_comma = (url.match(/,/g) || []).length;
+                    features.nb_semicolumn = (url.match(/;/g) || []).length;
+                    features.nb_dollar = (url.match(/\$/g) || []).length;
+                    features.nb_space = (url.match(/ /g) || []).length;
+                    features.nb_www = url.includes('www') ? 1 : 0;
+                    features.nb_com = url.includes('.com') ? 1 : 0;
+                    features.nb_dslash = (url.match(/\/\//g) || []).length;
+                    features.http_in_path = url.includes('http') ? 1 : 0;
+                    features.https_token = url.includes('https') ? 1 : 0;
+                    features.ratio_digits_url = (url.match(/\d/g) || []).length / url.length;
+                    features.ratio_digits_host = (window.location.hostname.match(/\d/g) || []).length / window.location.hostname.length;
+                    features.punycode = window.location.hostname.includes('xn--') ? 1 : 0;
+                    features.port = window.location.port ? 1 : 0;
+                    features.tld_in_path = 0; // 구현 어려움
+                    features.tld_in_subdomain = 0; // 구현 어려움
+                    features.abnormal_subdomain = 0; // 구현 어려움
+                    features.nb_subdomains = window.location.hostname.split('.').length - 2;
+                    features.prefix_suffix = window.location.hostname.includes('-') ? 1 : 0;
+                    features.random_domain = 0; // 구현 어려움
+                    features.shortening_service = 0; // 구현 어려움
+                    features.path_extension = 0; // 구현 어려움
+                    features.nb_redirection = 0; // 구현 어려움
+                    features.nb_external_redirection = 0; // 구현 어려움
+
+                    // 페이지 콘텐츠 기반
+                    features.length_words_raw = url.split(/[^a-zA-Z0-9]/).filter(w => w).length;
+                    features.char_repeat = 0; // 구현 어려움
+                    features.shortest_words_raw = Math.min(...url.split(/[^a-zA-Z0-9]/).filter(w => w).map(w => w.length)) || 0;
+                    features.shortest_word_host = Math.min(...window.location.hostname.split(/[^a-zA-Z0-9]/).filter(w => w).map(w => w.length)) || 0;
+                    features.shortest_word_path = Math.min(...window.location.pathname.split(/[^a-zA-Z0-9]/).filter(w => w).map(w => w.length)) || 0;
+                    features.longest_words_raw = Math.max(...url.split(/[^a-zA-Z0-9]/).filter(w => w).map(w => w.length)) || 0;
+                    features.longest_word_host = Math.max(...window.location.hostname.split(/[^a-zA-Z0-9]/).filter(w => w).map(w => w.length)) || 0;
+                    features.longest_word_path = Math.max(...window.location.pathname.split(/[^a-zA-Z0-9]/).filter(w => w).map(w => w.length)) || 0;
+                    features.avg_words_raw = url.split(/[^a-zA-Z0-9]/).filter(w => w).reduce((a, b) => a + b.length, 0) / url.split(/[^a-zA-Z0-9]/).filter(w => w).length || 0;
+                    features.avg_word_host = window.location.hostname.split(/[^a-zA-Z0-9]/).filter(w => w).reduce((a, b) => a + b.length, 0) / window.location.hostname.split(/[^a-zA-Z0-9]/).filter(w => w).length || 0;
+                    features.avg_word_path = window.location.pathname.split(/[^a-zA-Z0-9]/).filter(w => w).reduce((a, b) => a + b.length, 0) / window.location.pathname.split(/[^a-zA-Z0-9]/).filter(w => w).length || 0;
+                    features.phish_hints = 0; // 구현 어려움
+                    features.domain_in_brand = 0; // 구현 어려움
+                    features.brand_in_subdomain = 0; // 구현 어려움
+                    features.brand_in_path = 0; // 구현 어려움
+                    features.suspecious_tld = ['xyz', 'top', 'icu'].includes(window.location.hostname.split('.').pop()) ? 1 : 0;
+                    features.statistical_report = 0; // 구현 어려움
+                    features.nb_hyperlinks = document.getElementsByTagName('a').length;
+                    features.ratio_intHyperlinks = 0; // 구현 어려움
+                    features.ratio_extHyperlinks = 0; // 구현 어려움
+                    features.ratio_nullHyperlinks = 0; // 구현 어려움
+                    features.nb_extCSS = document.querySelectorAll('link[rel="stylesheet"]').length;
+                    features.ratio_intRedirection = 0; // 구현 어려움
+                    features.ratio_extRedirection = 0; // 구현 어려움
+                    features.ratio_intErrors = 0; // 구현 어려움
+                    features.ratio_extErrors = 0; // 구현 어려움
+                    features.login_form = hasLoginForm ? 1 : 0;
+                    features.external_favicon = document.querySelector('link[rel="icon"][href^="http"]') ? 1 : 0;
+                    features.links_in_tags = 0; // 구현 어려움
+                    features.submit_email = hasCreditCardForm ? 1 : 0; // 임시
+                    features.ratio_intMedia = 0; // 구현 어려움
+                    features.ratio_extMedia = 0; // 구현 어려움
+                    features.sfh = 0; // 구현 어려움
+                    features.iframe = iframeCount;
+                    features.popup_window = 0; // 구현 어려움
+                    features.safe_anchor = 0; // 구현 어려움
+                    features.onmouseover = 0; // 구현 어려움
+                    features.right_clic = 0; // 구현 어려움
+                    features.empty_title = document.title.trim() === '' ? 1 : 0;
+                    features.domain_in_title = document.title.includes(window.location.hostname) ? 1 : 0;
+                    features.domain_with_copyright = document.body.innerText.includes('©') && document.body.innerText.includes(window.location.hostname) ? 1 : 0;
+                    features.whois_registered_domain = 0; // 외부 필요
+                    features.domain_registration_length = 0; // 외부 필요
+                    features.domain_age = 0; // 외부 필요
+                    features.web_traffic = 0; // 외부 필요
+                    features.dns_record = 0; // 외부 필요
+                    features.google_index = 0; // 외부 필요
+                    features.page_rank = 0; // 외부 필요
+
+                    // 기존 피처 유지 (호환성)
+                    features.domNodeCount = domNodeCount;
+                    features.iframeCount = iframeCount;
+                    features.externalDomainFormCount = externalDomainFormCount;
+                    features.base64ScriptCount = base64ScriptCount;
+                    features.eventListenerCount = eventListenerCount;
+                    features.suspiciousScriptCount = suspiciousScriptCount;
+                    features.redirectChainLength = redirectChainLength;
+                    features.hasLoginForm = hasLoginForm;
+                    features.hasCreditCardForm = hasCreditCardForm;
+                    features.urlLength = urlLength;
+                    features.specialCharCount = specialCharCount;
 
                     // Android로 데이터 전송
                     Android.receiveFeatures(JSON.stringify(features));
@@ -666,20 +730,8 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
     }
 }
 
-// 웹페이지 피처 데이터 클래스
-data class WebFeatures(
-    val domNodeCount: Int,
-    val iframeCount: Int,
-    val externalDomainFormCount: Int,
-    val base64ScriptCount: Int,
-    val eventListenerCount: Int,
-    val suspiciousScriptCount: Int,
-    val redirectChainLength: Int,
-    val hasLoginForm: Boolean,
-    val hasCreditCardForm: Boolean,
-    val urlLength: Int,
-    val specialCharCount: Int
-)
+// 웹페이지 피처 데이터 클래스 (87개 피처를 Map으로 저장)
+typealias WebFeatures = Map<String, Float>
 
 // 논문에서 제안하는 규칙 기반 피싱 탐지 시스템
 class PhishingDetector(private val context: Context) {
@@ -710,174 +762,55 @@ class PhishingDetector(private val context: Context) {
         "work", "monster", "support", "fit", "cn", "ru", "su"
     )
 
-    // 피싱 점수 계산 (0.0 ~ 1.0)
-    fun calculatePhishingScore(features: WebFeatures): Double {
-        var score = 0.0
-        var maxScore = 0.0
-
-        // 각 피처에 대한 점수 계산
-        score += calculateFeatureScore(features.domNodeCount, PHISHING_RULES["DOM_NODE_THRESHOLD"]!!, 0.15)
-        maxScore += 0.15
-
-        score += calculateFeatureScore(features.iframeCount, PHISHING_RULES["IFRAME_THRESHOLD"]!!, 0.1)
-        maxScore += 0.1
-
-        score += calculateFeatureScore(features.externalDomainFormCount, PHISHING_RULES["EXTERNAL_FORM_THRESHOLD"]!!, 0.15)
-        maxScore += 0.15
-
-        score += calculateFeatureScore(features.base64ScriptCount, PHISHING_RULES["BASE64_SCRIPT_THRESHOLD"]!!, 0.1)
-        maxScore += 0.1
-
-        score += calculateFeatureScore(features.eventListenerCount, PHISHING_RULES["EVENT_LISTENER_THRESHOLD"]!!, 0.1)
-        maxScore += 0.1
-
-        score += calculateFeatureScore(features.suspiciousScriptCount, PHISHING_RULES["SUSPICIOUS_SCRIPT_THRESHOLD"]!!, 0.15)
-        maxScore += 0.15
-
-        score += calculateFeatureScore(features.redirectChainLength, PHISHING_RULES["REDIRECT_CHAIN_THRESHOLD"]!!, 0.1)
-        maxScore += 0.1
-
-        score += calculateFeatureScore(features.urlLength, PHISHING_RULES["URL_LENGTH_THRESHOLD"]!!, 0.1)
-        maxScore += 0.1
-
-        score += calculateFeatureScore(features.specialCharCount, PHISHING_RULES["SPECIAL_CHAR_THRESHOLD"]!!, 0.1)
-        maxScore += 0.1
-
-        // 로그인 폼이나 신용카드 폼이 있는 경우 추가 점수
-        if (features.hasLoginForm) {
-            score += 0.2
-            maxScore += 0.2
-        }
-
-        if (features.hasCreditCardForm) {
-            score += 0.3
-            maxScore += 0.3
-        }
-
-        return if (maxScore > 0) minOf(score / maxScore, 1.0) else 0.0
-    }
-
-    private fun calculateFeatureScore(value: Int, threshold: Int, weight: Double): Double {
-        return if (value > threshold) {
-            weight * minOf(value.toDouble() / threshold.toDouble(), 2.0) // 최대 2배까지
-        } else {
-            0.0
-        }
-    }
-
     // 피싱 여부 판단
     fun isPhishing(features: WebFeatures, url: String? = null, threshold: Double = phishingThreshold): Boolean {
         val result = analyzePhishing(features, url)
         return result.confidenceScore >= threshold
     }
 
-    // 피싱 분석 결과 생성 (DOM + URL 결합 + ML 하이브리드)
+    // ML 기반 통합 판정 시스템 (규칙 기반 제거)
     fun analyzePhishing(features: WebFeatures, url: String? = null): PhishingAnalysisResult {
-        val featureScore = calculatePhishingScore(features)
-        val riskFactors = collectFeatureRiskFactors(features)
+        // ML 예측 수행 (모든 피처를 ML 모델에 입력)
+        val mlPrediction = mlPredictor.predictWithML(features)
+
+        val riskFactors = mutableListOf<String>()
         val urlHeuristics = url?.let { evaluateUrlHeuristics(it) }
 
-        // ML 예측 수행
-        val mlPrediction = mlPredictor.predictWithML(features)
-        val mlScore = if (mlPrediction >= 0.0f) {
-            mlPrediction.toDouble() // ML 예측 성공
+        // ML 예측 결과를 기반으로 판정
+        val confidenceScore = if (mlPrediction >= 0.0f) {
+            mlPrediction.toDouble().coerceIn(0.0, 1.0)
         } else {
-            featureScore // ML 예측 실패 시 규칙 기반 점수 사용
+            // ML 모델 로드 실패 시 기본값 (안전하게 의심)
+            0.5
         }
 
-        // 하이브리드 점수 계산: 규칙 기반 + ML 예측 결합
-        val hybridScore = if (mlPrediction >= 0.0f) {
-            // ML 예측이 성공한 경우: 규칙 기반(40%) + ML(60%) 결합
-            (featureScore * 0.4) + (mlScore * 0.6)
+        val isPhishing = confidenceScore >= phishingThreshold
+
+        // 위험 요인 수집 (ML 기반)
+        if (mlPrediction >= 0.0f) {
+            riskFactors.add("ML 예측 점수: ${(confidenceScore * 100).toInt()}%")
+            if (isPhishing) {
+                riskFactors.add("ML 모델이 피싱으로 판정")
+            } else {
+                riskFactors.add("ML 모델이 안전으로 판정")
+            }
         } else {
-            // ML 예측 실패 시 규칙 기반 점수만 사용
-            featureScore
+            riskFactors.add("ML 모델 로드 실패 - 기본 판정 사용")
         }
 
-        val combinedScore = urlHeuristics?.let { combineScores(hybridScore, it.score) } ?: hybridScore
-
+        // URL 기반 위험 요인 추가
         if (urlHeuristics != null) {
             riskFactors.addAll(urlHeuristics.riskFactors)
         }
 
-        // ML 예측 정보 추가
-        if (mlPrediction >= 0.0f) {
-            riskFactors.add("ML 예측 점수: ${(mlScore * 100).toInt()}%")
-        } else {
-            riskFactors.add("ML 모델 로드 실패 - 규칙 기반 분석만 수행")
-        }
-
         return PhishingAnalysisResult(
-            isPhishing = combinedScore >= phishingThreshold,
-            confidenceScore = combinedScore.coerceIn(0.0, 1.0),
+            isPhishing = isPhishing,
+            confidenceScore = confidenceScore,
             riskFactors = riskFactors.distinct(),
             features = features,
             inspectedUrl = url,
-            analysisMode = if (urlHeuristics != null) AnalysisMode.FULL else AnalysisMode.DOM_ONLY
+            analysisMode = AnalysisMode.FULL
         )
-    }
-
-    // URL만으로 간소 분석 수행
-    fun analyzeUrlOnly(url: String): PhishingAnalysisResult {
-        val urlHeuristics = evaluateUrlHeuristics(url)
-        return PhishingAnalysisResult(
-            isPhishing = urlHeuristics.score >= phishingThreshold,
-            confidenceScore = urlHeuristics.score.coerceIn(0.0, 1.0),
-            riskFactors = urlHeuristics.riskFactors.distinct(),
-            features = null,
-            inspectedUrl = url,
-            analysisMode = AnalysisMode.URL_ONLY
-        )
-    }
-
-    private fun collectFeatureRiskFactors(features: WebFeatures): MutableList<String> {
-        val factors = mutableListOf<String>()
-
-        if (features.domNodeCount > PHISHING_RULES["DOM_NODE_THRESHOLD"]!!) {
-            factors.add("DOM 노드 수가 많음 (${features.domNodeCount})")
-        }
-
-        if (features.iframeCount > PHISHING_RULES["IFRAME_THRESHOLD"]!!) {
-            factors.add("iframe 개수가 많음 (${features.iframeCount})")
-        }
-
-        if (features.externalDomainFormCount > PHISHING_RULES["EXTERNAL_FORM_THRESHOLD"]!!) {
-            factors.add("외부 도메인 form이 많음 (${features.externalDomainFormCount})")
-        }
-
-        if (features.base64ScriptCount > PHISHING_RULES["BASE64_SCRIPT_THRESHOLD"]!!) {
-            factors.add("base64 스크립트가 발견됨 (${features.base64ScriptCount})")
-        }
-
-        if (features.eventListenerCount > PHISHING_RULES["EVENT_LISTENER_THRESHOLD"]!!) {
-            factors.add("이벤트 리스너가 많음 (${features.eventListenerCount})")
-        }
-
-        if (features.suspiciousScriptCount > PHISHING_RULES["SUSPICIOUS_SCRIPT_THRESHOLD"]!!) {
-            factors.add("의심스러운 스크립트가 발견됨 (${features.suspiciousScriptCount})")
-        }
-
-        if (features.redirectChainLength > PHISHING_RULES["REDIRECT_CHAIN_THRESHOLD"]!!) {
-            factors.add("리다이렉트 체인이 길음 (${features.redirectChainLength})")
-        }
-
-        if (features.hasLoginForm) {
-            factors.add("로그인 폼이 발견됨")
-        }
-
-        if (features.hasCreditCardForm) {
-            factors.add("신용카드 관련 폼이 발견됨")
-        }
-
-        if (features.urlLength > PHISHING_RULES["URL_LENGTH_THRESHOLD"]!!) {
-            factors.add("URL이 너무 김 (${features.urlLength})")
-        }
-
-        if (features.specialCharCount > PHISHING_RULES["SPECIAL_CHAR_THRESHOLD"]!!) {
-            factors.add("특수문자가 많음 (${features.specialCharCount})")
-        }
-
-        return factors
     }
 
     private fun evaluateUrlHeuristics(url: String): UrlHeuristicResult {
