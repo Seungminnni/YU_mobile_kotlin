@@ -1,42 +1,55 @@
 package com.example.a1
 
 import android.Manifest
+import android.content.ContentValues
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.util.Log
 import android.util.Patterns
 import android.view.View
+import android.view.Surface
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import org.json.JSONObject
 import android.widget.Button
+import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.core.*
+import androidx.appcompat.widget.Toolbar
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import androidx.appcompat.widget.Toolbar
+import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import java.net.URI
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import android.content.Context
+import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
 
@@ -45,20 +58,43 @@ class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
     private lateinit var resultTextView: TextView
     private lateinit var webView: WebView
-    private lateinit var toggleButton: Button
+    private lateinit var captureButton: FloatingActionButton
+    private lateinit var openGalleryButton: ImageButton
+    private lateinit var cameraControls: View
+    private lateinit var cameraHintText: TextView
+    private lateinit var urlSuggestionCard: View
+    private lateinit var urlPreviewText: TextView
+    private lateinit var openUrlButton: Button
+    private lateinit var dismissUrlButton: ImageButton
+    private lateinit var sandboxInfoPanel: View
+    private lateinit var exitSandboxButton: Button
 
     private var currentUrl: String? = null
+    private var pendingDetectedUrl: String? = null
+    private var lastDisplayedUrl: String? = null
+    private var imageCapture: ImageCapture? = null
     private var isWebViewVisible = false
     private var lastWarningShownForUrl: String? = null
     private lateinit var phishingDetector: PhishingDetector
 
+    private val requiredPermissions: Array<String> by lazy {
+        val list = mutableListOf(Manifest.permission.CAMERA)
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+            list.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+        list.toTypedArray()
+    }
+
     private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted: Boolean ->
-        if (isGranted) {
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val allGranted = requiredPermissions.all { perm ->
+            permissions[perm] == true || ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED
+        }
+        if (allGranted) {
             startCamera()
         } else {
-            Toast.makeText(this, "카메라 권한이 필요합니다", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "카메라 권한과 저장소 권한이 필요합니다", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -73,17 +109,27 @@ class MainActivity : AppCompatActivity() {
         previewView = findViewById(R.id.previewView)
         resultTextView = findViewById(R.id.resultTextView)
         webView = findViewById(R.id.webView)
-        toggleButton = findViewById(R.id.toggleButton)
+        captureButton = findViewById(R.id.captureButton)
+        openGalleryButton = findViewById(R.id.openGalleryButton)
+        cameraControls = findViewById(R.id.cameraControls)
+        cameraHintText = findViewById(R.id.cameraHintText)
+        urlSuggestionCard = findViewById(R.id.urlSuggestionCard)
+        urlPreviewText = findViewById(R.id.urlPreviewText)
+        openUrlButton = findViewById(R.id.openUrlButton)
+        dismissUrlButton = findViewById(R.id.dismissUrlButton)
+        sandboxInfoPanel = findViewById(R.id.sandboxInfoPanel)
+        exitSandboxButton = findViewById(R.id.exitSandboxButton)
 
         setupWebView()
 
         // 피싱 탐지 모듈 초기화
         phishingDetector = PhishingDetector(this)
 
-        // 토글 버튼 클릭 리스너
-        toggleButton.setOnClickListener {
-            toggleView()
-        }
+        captureButton.setOnClickListener { takePhoto() }
+        openGalleryButton.setOnClickListener { openDefaultGallery() }
+        openUrlButton.setOnClickListener { pendingDetectedUrl?.let { url -> launchSandbox(url) } }
+        dismissUrlButton.setOnClickListener { clearPendingUrl() }
+        exitSandboxButton.setOnClickListener { returnToCameraView() }
 
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -100,10 +146,10 @@ class MainActivity : AppCompatActivity() {
         cameraExecutor = Executors.newSingleThreadExecutor()
 
         // 카메라 권한 확인 및 요청
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+        if (allPermissionsGranted()) {
             startCamera()
         } else {
-            requestPermissionLauncher.launch(Manifest.permission.CAMERA)
+            requestPermissionLauncher.launch(requiredPermissions)
         }
     }
 
@@ -188,64 +234,36 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun toggleView() {
-        if (isWebViewVisible) {
-            // WebView에서 카메라 뷰로 전환
-            webView.visibility = View.GONE
-            previewView.visibility = View.VISIBLE
-            toggleButton.text = "웹뷰로 전환"
-            resultTextView.text = currentUrl ?: "QR 코드 결과를 여기에 표시합니다"
-        } else {
-            // 카메라 뷰에서 WebView로 전환
-            if (currentUrl != null) {
-                showVirtualEnvironmentWarning(currentUrl!!)
-            } else {
-                Toast.makeText(this, "먼저 QR 코드를 스캔해주세요", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    private fun showVirtualEnvironmentWarning(url: String) {
-        AlertDialog.Builder(this)
-            .setTitle("🚨 가상환경 보안 경고")
-            .setMessage("""
-                이 QR 코드는 다음 URL로 연결됩니다:
-                $url
-
-                🔒 가상환경에서 실행됩니다:
-                • JavaScript가 활성화되어 ML 분석 수행
-                • 외부 리소스 접근이 제한됨
-                • 파일 시스템 접근이 차단됨
-                • 위치 정보 접근이 비활성화됨
-
-                ⚠️  주의사항:
-                • 알려지지 않은 출처의 QR 코드는 위험할 수 있습니다
-                • 개인정보를 입력하지 마세요
-                • 의심스러운 링크는 피하세요
-
-                ML 기반 피싱 분석을 수행하시겠습니까?
-            """.trimIndent())
-            .setPositiveButton("ML 분석 수행") { dialog: android.content.DialogInterface?, which: Int ->
-                enableJavaScriptAndLoad(url)
-            }
-            .setNegativeButton("취소") { dialog: android.content.DialogInterface?, which: Int ->
-                dialog!!.dismiss()
-            }
-            .setCancelable(false)
-            .show()
-    }
-
-    private fun enableJavaScriptAndLoad(url: String) {
-        // WebView 표시 설정
+    private fun launchSandbox(url: String) {
+        pendingDetectedUrl = null
+        isWebViewVisible = true
+        currentUrl = url
+        urlSuggestionCard.visibility = View.GONE
+        cameraControls.visibility = View.GONE
+        cameraHintText.visibility = View.GONE
         previewView.visibility = View.GONE
         webView.visibility = View.VISIBLE
-        toggleButton.text = "카메라로 전환"
-        isWebViewVisible = true
+        sandboxInfoPanel.visibility = View.VISIBLE
 
-        webView.settings.javaScriptEnabled = true
-        webView.settings.domStorageEnabled = true
+        enableSandboxScripts()
         resultTextView.text = "⚠️ JavaScript가 활성화된 가상환경에서 로드 중..."
         webView.loadUrl(url)
+    }
+
+    private fun returnToCameraView() {
+        if (!isWebViewVisible) {
+            return
+        }
+        isWebViewVisible = false
+        webView.stopLoading()
+        webView.loadUrl("about:blank")
+        disableSandboxScripts()
+        previewView.visibility = View.VISIBLE
+        webView.visibility = View.GONE
+        sandboxInfoPanel.visibility = View.GONE
+        cameraControls.visibility = View.VISIBLE
+        cameraHintText.visibility = View.VISIBLE
+        clearPendingUrl(true)
     }
 
     private fun startCamera() {
@@ -256,12 +274,20 @@ class MainActivity : AppCompatActivity() {
                 val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
 
                 val preview = Preview.Builder()
+                    .setTargetRotation(previewView.display?.rotation ?: Surface.ROTATION_0)
                     .build()
                     .also {
                         it.setSurfaceProvider(previewView.surfaceProvider)
                     }
 
+                val capture = ImageCapture.Builder()
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                    .setTargetRotation(previewView.display?.rotation ?: Surface.ROTATION_0)
+                    .build()
+                imageCapture = capture
+
                 val imageAnalyzer = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
                     .also {
                         it.setAnalyzer(cameraExecutor, BarcodeAnalyzer())
@@ -271,7 +297,7 @@ class MainActivity : AppCompatActivity() {
 
                 cameraProvider.unbindAll()
                 cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageAnalyzer
+                    this, cameraSelector, preview, capture, imageAnalyzer
                 )
 
             } catch (exc: Exception) {
@@ -283,24 +309,30 @@ class MainActivity : AppCompatActivity() {
     private inner class BarcodeAnalyzer : ImageAnalysis.Analyzer {
         @androidx.camera.core.ExperimentalGetImage
         override fun analyze(imageProxy: ImageProxy) {
+            if (pendingDetectedUrl != null || isWebViewVisible) {
+                imageProxy.close()
+                return
+            }
             val mediaImage = imageProxy.image
             if (mediaImage != null) {
                 val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
 
                 barcodeScanner.process(image)
                     .addOnSuccessListener { barcodes ->
+                        if (pendingDetectedUrl != null || isWebViewVisible) return@addOnSuccessListener
                         for (barcode in barcodes) {
                             val rawValue = barcode.rawValue
-                            runOnUiThread {
-                                currentUrl = rawValue
-                                if (rawValue != null && isValidUrl(rawValue)) {
-                                    // QR 스캔 후 바로 WebView 전환 (ML 분석을 위해)
-                                    showVirtualEnvironmentWarning(rawValue)
-                                } else {
-                                    resultTextView.text = "📄 QR 코드 결과: $rawValue"
-                                    toggleButton.visibility = View.GONE
+                            if (rawValue != null && isValidUrl(rawValue)) {
+                                if (rawValue != lastDisplayedUrl) {
+                                    runOnUiThread {
+                                        currentUrl = rawValue
+                                        showUrlSuggestion(rawValue)
+                                    }
                                 }
-                                Toast.makeText(this@MainActivity, "QR 코드 인식됨", Toast.LENGTH_SHORT).show()
+                            } else if (!rawValue.isNullOrBlank()) {
+                                runOnUiThread {
+                                    cameraHintText.text = "📄 QR 코드 내용: $rawValue"
+                                }
                             }
                         }
                     }
@@ -317,12 +349,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onBackPressed() {
-        if (isWebViewVisible && webView.canGoBack()) {
-            webView.goBack()
-        } else if (isWebViewVisible) {
-            toggleView() // WebView에서 카메라 뷰로 돌아가기
-        } else {
-            super.onBackPressed()
+        when {
+            isWebViewVisible -> returnToCameraView()
+            urlSuggestionCard.visibility == View.VISIBLE -> clearPendingUrl()
+            else -> super.onBackPressed()
         }
     }
 
@@ -330,6 +360,90 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         cameraExecutor.shutdown()
         barcodeScanner.close()
+    }
+
+    private fun takePhoto() {
+        val capture = imageCapture
+        if (capture == null) {
+            Toast.makeText(this, "카메라 초기화 중입니다", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val name = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        val contentValues = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, "QR_$name")
+            put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/YUQR")
+            }
+        }
+        val outputOptions = ImageCapture.OutputFileOptions
+            .Builder(contentResolver, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+            .build()
+
+        capture.takePicture(
+            outputOptions,
+            ContextCompat.getMainExecutor(this),
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                    cameraHintText.text = "사진이 갤러리에 저장되었습니다"
+                    Toast.makeText(this@MainActivity, "갤러리에 저장 완료", Toast.LENGTH_SHORT).show()
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    Log.e(TAG, "사진 저장 실패", exception)
+                    Toast.makeText(this@MainActivity, "사진 저장 실패: ${exception.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
+
+    private fun openDefaultGallery() {
+        val intent = Intent(Intent.ACTION_VIEW, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
+        runCatching {
+            startActivity(intent)
+        }.onFailure {
+            Toast.makeText(this, "갤러리를 열 수 없습니다", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun showUrlSuggestion(url: String) {
+        pendingDetectedUrl = url
+        lastDisplayedUrl = url
+        urlPreviewText.text = formatUrlPreview(url)
+        urlSuggestionCard.visibility = View.VISIBLE
+        cameraHintText.text = "감지된 URL을 분석하려면 '가상분석'을 누르세요"
+    }
+
+    private fun clearPendingUrl(allowSameUrlAgain: Boolean = false) {
+        pendingDetectedUrl = null
+        urlSuggestionCard.visibility = View.GONE
+        if (allowSameUrlAgain) {
+            lastDisplayedUrl = null
+        }
+        if (!isWebViewVisible) {
+            cameraHintText.text = DEFAULT_CAMERA_HINT
+        }
+    }
+
+    private fun enableSandboxScripts() {
+        webView.settings.javaScriptEnabled = true
+        webView.settings.domStorageEnabled = true
+    }
+
+    private fun disableSandboxScripts() {
+        webView.settings.javaScriptEnabled = false
+        webView.settings.domStorageEnabled = false
+    }
+
+    private fun formatUrlPreview(url: String): String {
+        return if (url.length <= 60) url else "${url.take(57)}..."
+    }
+
+    private fun allPermissionsGranted(): Boolean {
+        return requiredPermissions.all { perm ->
+            ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED
+        }
     }
 
     private fun extractWebFeatures() {
@@ -404,6 +518,8 @@ class MainActivity : AppCompatActivity() {
         if (allowModal) {
             val warningKey = targetUrl ?: NO_URL_WARNING_KEY
             if (analysisResult.isPhishing) {
+                webView.stopLoading()
+                webView.loadUrl("about:blank")
                 if (lastWarningShownForUrl != warningKey) {
                     lastWarningShownForUrl = warningKey
                     showPhishingWarningDialog(analysisResult)
@@ -434,18 +550,14 @@ class MainActivity : AppCompatActivity() {
             append("• 개인정보, 비밀번호, 신용카드 정보를 절대 입력하지 마세요\n")
             append("• 의심스러운 링크는 클릭하지 마세요\n")
             append("• 즉시 이 페이지를 닫으세요\n\n")
-            append("정말로 계속하시겠습니까?")
+            append("연결은 차단됐으며 카메라 화면으로 돌아갑니다.")
         }
 
         AlertDialog.Builder(this)
             .setTitle("🚨 ML 기반 피싱 경고!")
             .setMessage(messageBuilder.toString())
-            .setPositiveButton("계속하기 (위험)") { dialog: android.content.DialogInterface?, which: Int ->
-                // 사용자가 위험을 감수하고 계속하기로 선택
-                Toast.makeText(this, "⚠️ 주의: ML 모델이 피싱으로 판정한 사이트입니다", Toast.LENGTH_LONG).show()
-            }
-            .setNegativeButton("닫기 (권장)") { dialog: android.content.DialogInterface?, which: Int ->
-                toggleView() // 카메라 뷰로 돌아가기
+            .setPositiveButton("확인") { _, _ ->
+                returnToCameraView()
             }
             .setCancelable(false)
             .show()
@@ -460,6 +572,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "MainActivity"
         private const val NO_URL_WARNING_KEY = "__NO_URL__"
+        private const val DEFAULT_CAMERA_HINT = "QR을 비추면 위협 URL이 여기에 나타납니다"
     }
 }
 
