@@ -676,6 +676,46 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
         return """
             javascript:(function() {
                 try {
+                    // 안전한 길이 계산 헬퍼: 빈 배열일 때 0 반환
+                    function safeMin(words) {
+                        if (!words || words.length === 0) return 0;
+                        var minLen = words[0].length;
+                        for (var i = 1; i < words.length; i++) {
+                            if (words[i].length < minLen) {
+                                minLen = words[i].length;
+                            }
+                        }
+                        return minLen;
+                    }
+
+                    function safeMax(words) {
+                        if (!words || words.length === 0) return 0;
+                        var maxLen = words[0].length;
+                        for (var i = 1; i < words.length; i++) {
+                            if (words[i].length > maxLen) {
+                                maxLen = words[i].length;
+                            }
+                        }
+                        return maxLen;
+                    }
+
+                    function safeAvg(words) {
+                        if (!words || words.length === 0) return 0;
+                        var total = 0;
+                        for (var i = 0; i < words.length; i++) {
+                            total += words[i].length;
+                        }
+                        return total / words.length;
+                    }
+
+                    function normalizeUrl(raw) {
+                        try {
+                            return new URL(raw, window.location.href);
+                        } catch (e) {
+                            return null;
+                        }
+                    }
+                    // safeMin/safeMax/safeAvg are defined above and reused.
                     // DOM 노드 수 계산
                     var domNodeCount = document.getElementsByTagName('*').length;
 
@@ -808,8 +848,15 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     var url = window.location.href;
                     var urlLength = url.length;
                     var specialCharCount = (url.match(/[^a-zA-Z0-9]/g) || []).length;
+                    var hostLower = window.location.hostname.toLowerCase();
+                    var pathLower = window.location.pathname.toLowerCase();
+                    var hostParts = hostLower.split('.');
+                    var subdomainPart = hostParts.length > 2 ? hostParts.slice(0, hostParts.length - 2).join('.') : '';
+                    var domainLabel = hostParts.length > 1 ? hostParts[hostParts.length - 2] : hostLower;
+                    var knownTlds = ['com','net','org','edu','gov','co','biz','info','xyz','top','icu','io','me','shop','online','site','ru','cn','su'];
+                    var shortenerHosts = ['bit.ly','tinyurl.com','t.co','goo.gl','ow.ly','is.gd','s.id','rebrand.ly','buff.ly','cutt.ly','lnkd.in'];
+                    var pathTokens = pathLower.split(/[\/\?#&_\-.]/).filter(function(w){ return w; });
 
-                    // 87개 피처 계산 (가능한 것만 구현, 어려운 것은 0)
                     var features = {};
 
                     // URL 기반 피처
@@ -821,7 +868,7 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.nb_at = (url.match(/@/g) || []).length;
                     features.nb_qm = (url.match(/\?/g) || []).length;
                     features.nb_and = (url.match(/&/g) || []).length;
-                    features.nb_or = (url.match(/\|/g) || []).length; // | 문자
+                    features.nb_or = (url.match(/\|/g) || []).length;
                     features.nb_eq = (url.match(/=/g) || []).length;
                     features.nb_underscore = (url.match(/_/g) || []).length;
                     features.nb_tilde = (url.match(/~/g) || []).length;
@@ -833,48 +880,111 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.nb_semicolumn = (url.match(/;/g) || []).length;
                     features.nb_dollar = (url.match(/\$/g) || []).length;
                     features.nb_space = (url.match(/ /g) || []).length;
-                    features.nb_www = (url.match(/www/g) || []).length;
-                    features.nb_com = (url.match(/\.com/g) || []).length; // 이진이 아닌데 이진으로 보고있음
+                    features.nb_www = (url.match(/www/gi) || []).length;
+                    features.nb_com = (url.match(/\.com/gi) || []).length;
                     features.nb_dslash = (url.match(/\/\//g) || []).length;
-                    features.http_in_path = (url.match(/http/g) || []).length;
-                    features.https_token = (url.match(/https/g) || []).length;
-                    features.ratio_digits_url = (url.match(/\d/g) || []).length / url.length;
-                    features.ratio_digits_host = (window.location.hostname.match(/\d/g) || []).length / window.location.hostname.length;
+                    features.http_in_path = pathLower.includes('http') ? 1 : 0;
+                    features.https_token = url.includes('https') ? 1 : 0;
+                    features.ratio_digits_url = (url.match(/\d/g) || []).length / Math.max(url.length, 1);
+                    features.ratio_digits_host = (window.location.hostname.match(/\d/g) || []).length / Math.max(window.location.hostname.length, 1);
                     features.punycode = window.location.hostname.includes('xn--') ? 1 : 0;
                     features.port = window.location.port ? 1 : 0;
-                    features.tld_in_path = null; // 구현 어려움
-                    features.tld_in_subdomain = null; // 구현 어려움
-                    features.abnormal_subdomain = null; // 구현 어려움
-                    features.nb_subdomains = window.location.hostname.split('.').length - 2;
-                    features.prefix_suffix = (window.location.hostname.match(/-/g) || []).length;
-                    features.random_domain = null; // 구현 어려움
-                    features.shortening_service = null; // 구현 어려움
-                    features.path_extension = null; // 구현 어려움
-                    features.nb_redirection = null; // 구현 어려움
-                    features.nb_external_redirection = null; // 구현 어려움
+                    features.tld_in_path = pathTokens.some(function(tok){ return knownTlds.includes(tok); }) ? 1 : 0;
+                    var subTokens = subdomainPart.split('.').filter(function(w){ return w; });
+                    features.tld_in_subdomain = subTokens.some(function(tok){ return knownTlds.includes(tok); }) ? 1 : 0;
+                    var subDigits = subdomainPart.replace(/[^0-9]/g,'').length;
+                    features.abnormal_subdomain = (subdomainPart.length >= 30 || (subdomainPart.match(/\./g) || []).length >= 2 || (subDigits / Math.max(subdomainPart.length || 1, 1)) > 0.3) ? 1 : 0;
+                    features.nb_subdomains = Math.max(window.location.hostname.split('.').length - 2, 0);
+                    features.prefix_suffix = window.location.hostname.includes('-') ? 1 : 0;
+                    features.random_domain = (domainLabel && domainLabel.length >= 5 && (domainLabel.replace(/[aeiou]/gi,'').length / domainLabel.length) > 0.6) ? 1 : 0;
+                    features.shortening_service = shortenerHosts.includes(hostLower) ? 1 : 0;
+                    features.path_extension = /\.(php|html|htm|asp|aspx|jsp|exe|scr|zip|rar|jar|bat)$/i.test(window.location.pathname) ? 1 : 0;
+                    features.nb_redirection = redirectChainLength;
+                    var externalRedirects = 0;
+                    try {
+                        if (window.performance && window.performance.getEntriesByType) {
+                            var resources = window.performance.getEntriesByType('resource') || [];
+                            for (var r = 0; r < resources.length; r++) {
+                                var entry = resources[r];
+                                var normalizedRes = normalizeUrl(entry.name);
+                                if (normalizedRes && normalizedRes.hostname && normalizedRes.hostname !== window.location.hostname) {
+                                    externalRedirects++;
+                                }
+                            }
+                        }
+                    } catch (perfErr) {}
+                    features.nb_external_redirection = externalRedirects;
 
                     // 페이지 콘텐츠 기반  !!삼항연산자 혹은 조건문으로 디버ㅗ깅을 해야함
-                    features.length_words_raw = url.split(/[^a-zA-Z0-9]/).filter(w => w).length;
-                    features.char_repeat = null; // 구현 어려움
-                    features.shortest_words_raw = Math.min(...url.split(/[^a-zA-Z0-9]/).filter(w => w).map(w => w.length)) || 0;
-                    features.shortest_word_host = Math.min(...window.location.hostname.split(/[^a-zA-Z0-9]/).filter(w => w).map(w => w.length)) || 0;
-                    features.shortest_word_path = Math.min(...window.location.pathname.split(/[^a-zA-Z0-9]/).filter(w => w).map(w => w.length)) || 0;
-                    features.longest_words_raw = Math.max(...url.split(/[^a-zA-Z0-9]/).filter(w => w).map(w => w.length)) || 0;
-                    features.longest_word_host = Math.max(...window.location.hostname.split(/[^a-zA-Z0-9]/).filter(w => w).map(w => w.length)) || 0;
-                    features.longest_word_path = Math.max(...window.location.pathname.split(/[^a-zA-Z0-9]/).filter(w => w).map(w => w.length)) || 0;
-                    features.avg_words_raw = url.split(/[^a-zA-Z0-9]/).filter(w => w).reduce((a, b) => a + b.length, 0) / url.split(/[^a-zA-Z0-9]/).filter(w => w).length || 0;
-                    features.avg_word_host = window.location.hostname.split(/[^a-zA-Z0-9]/).filter(w => w).reduce((a, b) => a + b.length, 0) / window.location.hostname.split(/[^a-zA-Z0-9]/).filter(w => w).length || 0;
-                    features.avg_word_path = window.location.pathname.split(/[^a-zA-Z0-9]/).filter(w => w).reduce((a, b) => a + b.length, 0) / window.location.pathname.split(/[^a-zA-Z0-9]/).filter(w => w).length || 0;
-                    features.phish_hints = null; // 구현 어려움 삼항연산자 혹은 조건문으로 디버ㅗ깅을 해야함
-                    features.domain_in_brand = null; // 구현 어려움
-                    features.brand_in_subdomain = null; // 구현 어려움
-                    features.brand_in_path = null; // 구현 어려움
+                    var pathWords = window.location.pathname.split(/[^a-zA-Z0-9]/).filter(function(w){ return w; });
+                    var hostWords = window.location.hostname.split(/[^a-zA-Z0-9]/).filter(function(w){ return w; });
+                    features.length_words_raw = pathTokens.length;
+                    var repeatMatches = url.match(/(.)\1{2,}/g);
+                    features.char_repeat = repeatMatches ? repeatMatches.length : 0;
+                    features.shortest_words_raw = safeMin(pathTokens);
+                    features.shortest_word_host = safeMin(hostWords);
+                    features.shortest_word_path = safeMin(pathWords);
+                    features.longest_words_raw = safeMax(pathTokens);
+                    features.longest_word_host = safeMax(hostWords);
+                    features.longest_word_path = safeMax(pathWords);
+                    features.avg_words_raw = safeAvg(pathTokens);
+                    features.avg_word_host = safeAvg(hostWords);
+                    features.avg_word_path = safeAvg(pathWords);
+                    // safe helpers already set above; keep these as fallback too
+                    features.longest_words_raw = safeMax(url.split(/[^a-zA-Z0-9]/).filter(function(w){return w;}).map(function(w){return w.length;}));
+                    features.longest_word_host = safeMax(window.location.hostname.split(/[^a-zA-Z0-9]/).filter(function(w){return w;}).map(function(w){return w.length;}));
+                    features.longest_word_path = safeMax(window.location.pathname.split(/[^a-zA-Z0-9]/).filter(function(w){return w;}).map(function(w){return w.length;}));
+                    features.avg_words_raw = safeAvg(url.split(/[^a-zA-Z0-9]/).filter(function(w){return w;}));
+                    features.avg_word_host = safeAvg(window.location.hostname.split(/[^a-zA-Z0-9]/).filter(function(w){return w;}));
+                    features.avg_word_path = safeAvg(window.location.pathname.split(/[^a-zA-Z0-9]/).filter(function(w){return w;}));
+                    // 문서 전체에서 피싱 의심 키워드 수 계산
+                    var bodyText = (document.body && document.body.innerText) ? document.body.innerText.toLowerCase() : '';
+                    var hints = ['login','secure','verify','bank','signin','authenticate','account','인증','로그인','보안'];
+                    var hintCount = 0;
+                    for (var h = 0; h < hints.length; h++) {
+                        var re = new RegExp('\\b' + hints[h] + '\\b','gi');
+                        var matches = bodyText.match(re);
+                        hintCount += matches ? matches.length : 0;
+                    }
+                    features.phish_hints = hintCount;
+                    // 브랜드 관련: 단순 포함 검사 (앱에서 브랜드 리스트로 관리 권장)
+                    var brandKeywords = ['paypal','naver','apple','bank','google','microsoft','kakao','facebook','instagram'];
+                    function containsBrand(str) {
+                        if (!str) return false;
+                        var lower = str.toLowerCase();
+                        for (var b = 0; b < brandKeywords.length; b++) {
+                            if (lower.indexOf(brandKeywords[b]) !== -1) return true;
+                        }
+                        return false;
+                    }
+                    features.domain_in_brand = containsBrand(domainLabel) ? 1 : 0;
+                    features.brand_in_subdomain = containsBrand(subdomainPart) ? 1 : 0;
+                    features.brand_in_path = containsBrand(pathLower) ? 1 : 0;
                     features.suspecious_tld = ['xyz', 'top', 'icu'].includes(window.location.hostname.split('.').pop()) ? 1 : 0;
                     features.statistical_report = null; // 구현 어려움
                     features.nb_hyperlinks = document.getElementsByTagName('a').length;
-                    features.ratio_intHyperlinks = null; // 구현 어려움
-                    features.ratio_extHyperlinks = null; // 구현 어려움
-                    features.ratio_nullHyperlinks = null; // 구현 어려움
+                    // 링크 비율 계산 (내부/외부/무효)
+                    var anchors = Array.prototype.slice.call(document.querySelectorAll('a[href]'));
+                    var totalAnchors = anchors.length;
+                    var internalCount = 0;
+                    var externalCount = 0;
+                    var nullCount = 0;
+                    for (var a = 0; a < anchors.length; a++) {
+                        var href = anchors[a].getAttribute('href');
+                        if (!href || href.trim() === '' || href.startsWith('#') || href.startsWith('javascript:')) {
+                            nullCount++;
+                            continue;
+                        }
+                        var n = normalizeUrl(href);
+                        if (!n || !n.hostname) {
+                            nullCount++;
+                            continue;
+                        }
+                        if (n.hostname === window.location.hostname) internalCount++; else externalCount++;
+                    }
+                    features.ratio_intHyperlinks = totalAnchors === 0 ? 0 : (internalCount / totalAnchors);
+                    features.ratio_extHyperlinks = totalAnchors === 0 ? 0 : (externalCount / totalAnchors);
+                    features.ratio_nullHyperlinks = totalAnchors === 0 ? 0 : (nullCount / totalAnchors);
                     features.nb_extCSS = document.querySelectorAll('link[rel="stylesheet"]').length;
                     features.ratio_intRedirection = null; // 구현 어려움
                     features.ratio_extRedirection = null; // 구현 어려움
@@ -895,24 +1005,67 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                         if (hasEmailSubmit) break;
                     }
                     features.submit_email = hasEmailSubmit ? 1 : 0;
-                    features.ratio_intMedia = null; // 구현 어려움
-                    features.ratio_extMedia = null; // 구현 어려움
-                    features.sfh = null; // 구현 어려움
+                    // 미디어 src 비율 (img/video/audio/source)
+                    var mediaEls = Array.prototype.slice.call(document.querySelectorAll('img, video, audio, source'));
+                    var totalMedia = mediaEls.length;
+                    var internalMedia = 0;
+                    var externalMedia = 0;
+                    for (var m = 0; m < mediaEls.length; m++) {
+                        var src = mediaEls[m].getAttribute('src') || mediaEls[m].getAttribute('data-src');
+                        if (!src) continue;
+                        var nm = normalizeUrl(src);
+                        if (!nm || !nm.hostname) continue;
+                        if (nm.hostname === window.location.hostname) internalMedia++; else externalMedia++;
+                    }
+                    features.ratio_intMedia = totalMedia === 0 ? 0 : (internalMedia / totalMedia);
+                    features.ratio_extMedia = totalMedia === 0 ? 0 : (externalMedia / totalMedia);
+                    // sfh: form action 빈값/#/외부 도메인일 때 unsafe, 비율로 반환
+                    var unsafeForms = 0;
+                    for (var f = 0; f < forms.length; f++) {
+                        var action = forms[f].getAttribute('action') || '';
+                        var trimmed = action.trim();
+                        if (!trimmed || trimmed === '#') {
+                            unsafeForms++; continue;
+                        }
+                        if (trimmed.indexOf('http') === 0) {
+                            var urlA = normalizeUrl(trimmed);
+                            if (urlA && urlA.hostname && urlA.hostname !== window.location.hostname) unsafeForms++;
+                        }
+                    }
+                    features.sfh = forms.length === 0 ? 0 : (unsafeForms / forms.length);
                     features.iframe = iframeCount;
-                    features.popup_window = null; // 구현 어려움
-                    features.safe_anchor = null; // 구현 어려움
-                    features.onmouseover = null; // 구현 어려움
-                    features.right_clic = null; // 구현 어려움
+                    // popup 및 target=_blank 수집
+                    var popCount = 0;
+                    var anchorsAll = document.getElementsByTagName('a');
+                    for (var x = 0; x < anchorsAll.length; x++) {
+                        var el = anchorsAll[x];
+                        var tgt = el.getAttribute('target');
+                        var onclick = el.getAttribute('onclick') || '';
+                        if (tgt === '_blank') popCount++;
+                        if (onclick && onclick.indexOf('window.open') !== -1) popCount++;
+                    }
+                    features.popup_window = popCount;
+                    features.safe_anchor = totalAnchors === 0 ? 0 : (1 - (nullCount / totalAnchors));
+                    features.onmouseover = document.querySelectorAll('[onmouseover]').length > 0 ? 1 : 0;
+                    features.right_clic = (document.body && document.body.oncontextmenu) ? 1 : (document.querySelectorAll('[oncontextmenu]').length > 0 ? 1 : 0);
                     features.empty_title = document.title.trim() === '' ? 1 : 0;
                     features.domain_in_title = document.title.includes(window.location.hostname) ? 1 : 0;
                     features.domain_with_copyright = document.body.innerText.includes('©') && document.body.innerText.includes(window.location.hostname) ? 1 : 0;
-                    features.whois_registered_domain = null; // 외부 필요
-                    features.domain_registration_length = null; // 외부 필요
-                    features.domain_age = null; // 외부 필요
-                    features.web_traffic = null; // 외부 필요
-                    features.dns_record = null; // 외부 필요
-                    features.google_index = null; // 외부 필요
-                    features.page_rank = null; // 외부 필요
+                    // External API dependant features (left as null or commented)
+                    // features.whois_registered_domain = null; // requires WHOIS lookup
+                    // features.domain_registration_length = null; // requires WHOIS
+                    // features.domain_age = null; // requires WHOIS
+                    // features.web_traffic = null; // requires 3rd-party analytics
+                    // features.dns_record = null; // requires DNS lookup
+                    // features.google_index = null; // requires search engine API
+                    // features.page_rank = null; // requires external API
+                    features.whois_registered_domain = null;
+                    features.domain_registration_length = null;
+                    features.domain_age = null;
+                    features.web_traffic = null;
+                    features.dns_record = null;
+                    features.google_index = null;
+                    features.page_rank = null;
 
                     // 기존 피처 유지 (호환성)
                     features.domNodeCount = domNodeCount;
