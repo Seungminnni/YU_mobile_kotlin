@@ -76,6 +76,8 @@ class MainActivity : AppCompatActivity() {
     private var lastDisplayedUrl: String? = null
     private var imageCapture: ImageCapture? = null
     private var isWebViewVisible = false
+    private var lastAnalyzedPageKey: String? = null
+    private var isAnalyzingFeatures = false
     private var lastWarningShownForUrl: String? = null
     private lateinit var phishingDetector: PhishingDetector
 
@@ -217,10 +219,10 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 // 피처 추출 실행 (JavaScript 활성화된 경우에만)
-                if (webView.settings.javaScriptEnabled) {
+                if (webView.settings.javaScriptEnabled && url != null && shouldAnalyzeUrl(url)) {
                     resultTextView.text = "🔍 가상환경에서 피처 분석 중..."
                     extractWebFeatures()
-                } else {
+                } else if (!webView.settings.javaScriptEnabled) {
                     resultTextView.text = "🔒 보안 모드: 피처 분석을 위해 JavaScript가 필요합니다"
                 }
             }
@@ -255,6 +257,8 @@ class MainActivity : AppCompatActivity() {
         pendingDetectedUrl = null
         isWebViewVisible = true
         currentUrl = url
+        lastAnalyzedPageKey = null
+        isAnalyzingFeatures = false
         urlSuggestionCard.visibility = View.GONE
         cameraControls.visibility = View.GONE
         cameraHintText.visibility = View.GONE
@@ -281,6 +285,8 @@ class MainActivity : AppCompatActivity() {
         cameraControls.visibility = View.VISIBLE
         cameraHintText.visibility = View.VISIBLE
         clearPendingUrl(true)
+        lastAnalyzedPageKey = null
+        isAnalyzingFeatures = false
     }
 
     private fun startCamera() {
@@ -456,6 +462,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun extractWebFeatures() {
+        isAnalyzingFeatures = true
         val extractor = WebFeatureExtractor { features ->
             runOnUiThread {
                 analyzeAndDisplayPhishingResult(features)
@@ -466,6 +473,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun analyzeAndDisplayPhishingResult(features: WebFeatures) {
         val analysisResult = phishingDetector.analyzePhishing(features, currentUrl)
+        isAnalyzingFeatures = false
+        lastAnalyzedPageKey = analysisResult.inspectedUrl ?: currentUrl
         renderAnalysis(analysisResult)
     }
 
@@ -576,6 +585,19 @@ class MainActivity : AppCompatActivity() {
         return Patterns.WEB_URL.matcher(url).matches() ||
                url.startsWith("http://") ||
                url.startsWith("https://")
+    }
+
+    private fun shouldAnalyzeUrl(url: String): Boolean {
+        if (url.isBlank() || url.equals("about:blank", ignoreCase = true)) {
+            return false
+        }
+        if (isAnalyzingFeatures) {
+            return false
+        }
+        if (lastAnalyzedPageKey != null && lastAnalyzedPageKey == url) {
+            return false
+        }
+        return true
     }
 
     companion object {
@@ -768,20 +790,20 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.ratio_digits_host = (window.location.hostname.match(/\d/g) || []).length / window.location.hostname.length;
                     features.punycode = window.location.hostname.includes('xn--') ? 1 : 0;
                     features.port = window.location.port ? 1 : 0;
-                    features.tld_in_path = 0; // 구현 어려움
-                    features.tld_in_subdomain = 0; // 구현 어려움
-                    features.abnormal_subdomain = 0; // 구현 어려움
+                    features.tld_in_path = null; // 구현 어려움
+                    features.tld_in_subdomain = null; // 구현 어려움
+                    features.abnormal_subdomain = null; // 구현 어려움
                     features.nb_subdomains = window.location.hostname.split('.').length - 2;
                     features.prefix_suffix = window.location.hostname.includes('-') ? 1 : 0;
-                    features.random_domain = 0; // 구현 어려움
-                    features.shortening_service = 0; // 구현 어려움
-                    features.path_extension = 0; // 구현 어려움
-                    features.nb_redirection = 0; // 구현 어려움
-                    features.nb_external_redirection = 0; // 구현 어려움
+                    features.random_domain = null; // 구현 어려움
+                    features.shortening_service = null; // 구현 어려움
+                    features.path_extension = null; // 구현 어려움
+                    features.nb_redirection = null; // 구현 어려움
+                    features.nb_external_redirection = null; // 구현 어려움
 
                     // 페이지 콘텐츠 기반
                     features.length_words_raw = url.split(/[^a-zA-Z0-9]/).filter(w => w).length;
-                    features.char_repeat = 0; // 구현 어려움
+                    features.char_repeat = null; // 구현 어려움
                     features.shortest_words_raw = Math.min(...url.split(/[^a-zA-Z0-9]/).filter(w => w).map(w => w.length)) || 0;
                     features.shortest_word_host = Math.min(...window.location.hostname.split(/[^a-zA-Z0-9]/).filter(w => w).map(w => w.length)) || 0;
                     features.shortest_word_path = Math.min(...window.location.pathname.split(/[^a-zA-Z0-9]/).filter(w => w).map(w => w.length)) || 0;
@@ -791,43 +813,43 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.avg_words_raw = url.split(/[^a-zA-Z0-9]/).filter(w => w).reduce((a, b) => a + b.length, 0) / url.split(/[^a-zA-Z0-9]/).filter(w => w).length || 0;
                     features.avg_word_host = window.location.hostname.split(/[^a-zA-Z0-9]/).filter(w => w).reduce((a, b) => a + b.length, 0) / window.location.hostname.split(/[^a-zA-Z0-9]/).filter(w => w).length || 0;
                     features.avg_word_path = window.location.pathname.split(/[^a-zA-Z0-9]/).filter(w => w).reduce((a, b) => a + b.length, 0) / window.location.pathname.split(/[^a-zA-Z0-9]/).filter(w => w).length || 0;
-                    features.phish_hints = 0; // 구현 어려움
-                    features.domain_in_brand = 0; // 구현 어려움
-                    features.brand_in_subdomain = 0; // 구현 어려움
-                    features.brand_in_path = 0; // 구현 어려움
+                    features.phish_hints = null; // 구현 어려움
+                    features.domain_in_brand = null; // 구현 어려움
+                    features.brand_in_subdomain = null; // 구현 어려움
+                    features.brand_in_path = null; // 구현 어려움
                     features.suspecious_tld = ['xyz', 'top', 'icu'].includes(window.location.hostname.split('.').pop()) ? 1 : 0;
-                    features.statistical_report = 0; // 구현 어려움
+                    features.statistical_report = null; // 구현 어려움
                     features.nb_hyperlinks = document.getElementsByTagName('a').length;
-                    features.ratio_intHyperlinks = 0; // 구현 어려움
-                    features.ratio_extHyperlinks = 0; // 구현 어려움
-                    features.ratio_nullHyperlinks = 0; // 구현 어려움
+                    features.ratio_intHyperlinks = null; // 구현 어려움
+                    features.ratio_extHyperlinks = null; // 구현 어려움
+                    features.ratio_nullHyperlinks = null; // 구현 어려움
                     features.nb_extCSS = document.querySelectorAll('link[rel="stylesheet"]').length;
-                    features.ratio_intRedirection = 0; // 구현 어려움
-                    features.ratio_extRedirection = 0; // 구현 어려움
-                    features.ratio_intErrors = 0; // 구현 어려움
-                    features.ratio_extErrors = 0; // 구현 어려움
+                    features.ratio_intRedirection = null; // 구현 어려움
+                    features.ratio_extRedirection = null; // 구현 어려움
+                    features.ratio_intErrors = null; // 구현 어려움
+                    features.ratio_extErrors = null; // 구현 어려움
                     features.login_form = hasLoginForm ? 1 : 0;
                     features.external_favicon = document.querySelector('link[rel="icon"][href^="http"]') ? 1 : 0;
-                    features.links_in_tags = 0; // 구현 어려움
+                    features.links_in_tags = null; // 구현 어려움
                     features.submit_email = hasCreditCardForm ? 1 : 0; // 임시
-                    features.ratio_intMedia = 0; // 구현 어려움
-                    features.ratio_extMedia = 0; // 구현 어려움
-                    features.sfh = 0; // 구현 어려움
+                    features.ratio_intMedia = null; // 구현 어려움
+                    features.ratio_extMedia = null; // 구현 어려움
+                    features.sfh = null; // 구현 어려움
                     features.iframe = iframeCount;
-                    features.popup_window = 0; // 구현 어려움
-                    features.safe_anchor = 0; // 구현 어려움
-                    features.onmouseover = 0; // 구현 어려움
-                    features.right_clic = 0; // 구현 어려움
+                    features.popup_window = null; // 구현 어려움
+                    features.safe_anchor = null; // 구현 어려움
+                    features.onmouseover = null; // 구현 어려움
+                    features.right_clic = null; // 구현 어려움
                     features.empty_title = document.title.trim() === '' ? 1 : 0;
                     features.domain_in_title = document.title.includes(window.location.hostname) ? 1 : 0;
                     features.domain_with_copyright = document.body.innerText.includes('©') && document.body.innerText.includes(window.location.hostname) ? 1 : 0;
-                    features.whois_registered_domain = 0; // 외부 필요
-                    features.domain_registration_length = 0; // 외부 필요
-                    features.domain_age = 0; // 외부 필요
-                    features.web_traffic = 0; // 외부 필요
-                    features.dns_record = 0; // 외부 필요
-                    features.google_index = 0; // 외부 필요
-                    features.page_rank = 0; // 외부 필요
+                    features.whois_registered_domain = null; // 외부 필요
+                    features.domain_registration_length = null; // 외부 필요
+                    features.domain_age = null; // 외부 필요
+                    features.web_traffic = null; // 외부 필요
+                    features.dns_record = null; // 외부 필요
+                    features.google_index = null; // 외부 필요
+                    features.page_rank = null; // 외부 필요
 
                     // 기존 피처 유지 (호환성)
                     features.domNodeCount = domNodeCount;
@@ -867,7 +889,7 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
 }
 
 // 웹페이지 피처 데이터 클래스 (87개 피처를 Map으로 저장)
-typealias WebFeatures = Map<String, Float>
+typealias WebFeatures = Map<String, Float?>
 
 // 논문에서 제안하는 규칙 기반 피싱 탐지 시스템
 class PhishingDetector(private val context: Context) {
@@ -921,18 +943,27 @@ class PhishingDetector(private val context: Context) {
         }
 
         val isPhishing = confidenceScore >= phishingThreshold
-
-        // 위험 요인 수집 (ML 기반)
-        if (mlPrediction >= 0.0f) {
-            riskFactors.add("ML 예측 점수: ${(confidenceScore * 100).toInt()}%")
-            if (isPhishing) {
-                riskFactors.add("ML 모델이 피싱으로 판정")
+                // Detect JSON nulls explicitly
+                if (jsonObject.isNull(key)) {
+                    features[key] = null
+                } else {
+                    val value = jsonObject.get(key)
+                    features[key] = when (value) {
+                        is Number -> value.toFloat()
+                        is Boolean -> if (value) 1.0f else 0.0f
+                        else -> null
+                    }
+                }
             } else {
-                riskFactors.add("ML 모델이 안전으로 판정")
+            // NULL 값(미구현) 및 sentinel(-9999) 값이 있는 피처를 로그로 남겨서 데이터 수집 시 어떤 피처가 미구현인지 파악
+            val nullKeys = features.filter { it.value == null }.map { it.key }
+            val sentinelKeys = features.filter { it.value == -9999.0f }.map { it.key }
+            if (nullKeys.isNotEmpty()) {
+                Log.d("WebFeatureExtractor", "NULL(미구현) 피처 목록: ${'$'}{nullKeys.joinToString(", ")}")
             }
-        } else {
-            riskFactors.add("ML 모델 로드 실패 - 기본 판정 사용")
-        }
+            if (sentinelKeys.isNotEmpty()) {
+                Log.d("WebFeatureExtractor", "Sentinel(미구현) 피처 목록: ${'$'}{sentinelKeys.joinToString(", ")}")
+            }
 
         // URL 기반 위험 요인 추가
         if (urlHeuristics != null) {

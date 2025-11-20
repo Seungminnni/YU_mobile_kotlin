@@ -15,6 +15,7 @@ class TFLitePhishingPredictor(private val context: Context) {
     private var interpreter: Interpreter? = null
     private var featureColumns: List<String> = emptyList()
     private var inputShape: IntArray = intArrayOf()
+    private var medians: Map<String, Float> = emptyMap()
 
     companion object {
         private const val TAG = "TFLitePhishingPredictor"
@@ -67,6 +68,20 @@ class TFLitePhishingPredictor(private val context: Context) {
 
             Log.d(TAG, "피처 정보 로드 성공: ${featureColumns.size}개 피처")
             Log.d(TAG, "피처 목록: ${featureColumns.joinToString(", ")}")
+            // medians가 있으면 읽어둡니다 (노트북에서 저장하도록 확장 가능)
+            if (jsonObject.has("medians")) {
+                val medJson = jsonObject.getJSONObject("medians")
+                val keys = medJson.keys()
+                val map = mutableMapOf<String, Float>()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    map[k] = medJson.getDouble(k).toFloat()
+                }
+                medians = map
+                Log.d(TAG, "medians 로드 성공: ${medians.keys.size}개")
+            } else {
+                Log.d(TAG, "medians 없음: 기본 결측값 0.0 사용")
+            }
 
         } catch (e: Exception) {
             Log.e(TAG, "피처 정보 로드 실패", e)
@@ -84,6 +99,11 @@ class TFLitePhishingPredictor(private val context: Context) {
         }
 
         return try {
+            // 로깅: JSON에서 누락된 키들
+            val missingKeys = featureColumns.filter { !features.containsKey(it) || features[it] == null }
+            if (missingKeys.isNotEmpty()) {
+                Log.d(TAG, "Missing features (null/absent): ${missingKeys.joinToString(", ")}")
+            }
             val inputArray = webFeaturesToFloatArray(features)
             val outputBuffer = TensorBuffer.createFixedSize(intArrayOf(1, 1), DataType.FLOAT32)
 
@@ -107,7 +127,12 @@ class TFLitePhishingPredictor(private val context: Context) {
         val inputArray = FloatArray(featureColumns.size)
         for (i in featureColumns.indices) {
             val featureName = featureColumns[i]
-            inputArray[i] = features[featureName] ?: 0.0f
+            val v = features[featureName]
+            inputArray[i] = when {
+                v != null -> v
+                medians.containsKey(featureName) -> medians[featureName]!!
+                else -> 0.0f
+            }
         }
 
         Log.d(TAG, "입력 피처 배열: ${inputArray.joinToString(", ")}")
