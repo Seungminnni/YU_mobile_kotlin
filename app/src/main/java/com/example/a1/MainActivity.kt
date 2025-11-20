@@ -638,19 +638,46 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                 if (jsonObject.isNull(key)) {
                     features[key] = null
                 } else {
-                    features[key] = when (value) {
-                        is Number -> value.toFloat()
-                        is Boolean -> if (value) 1.0f else 0.0f
-                        is String -> {
-                            // Try to parse numeric strings, otherwise log and set null
-                            val s = value.trim()
-                            s.toFloatOrNull()?.also { Log.d("WebFeatureExtractor", "Parsed numeric-string for $key: $s") } ?: run {
-                                Log.d("WebFeatureExtractor", "Non-numeric value for $key: '$s'")
+                    // Raw JSON from WebView — log it for debugging so you can inspect exactly
+                    // what values the JS extracted (including nulls or strings).
+                    Log.d("WebFeatureExtractor", "RAW_FEATURES_JSON: $featuresJson")
+
+                    val jsonObject = JSONObject(featuresJson)
+                    val features = mutableMapOf<String, Float?>()
+                    val keys = jsonObject.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        // If JS explicitly put null, treat as Kotlin null
+                        if (jsonObject.isNull(key)) {
+                            features[key] = null
+                            continue
+                        }
+
+                        val value = jsonObject.get(key)
+                        features[key] = when (value) {
+                            is Number -> value.toFloat()
+                            is Boolean -> if (value) 1.0f else 0.0f
+                            is String -> {
+                                val s = value.trim()
+                                s.toFloatOrNull()?.also {
+                                    Log.d("WebFeatureExtractor", "Parsed numeric-string for $key: $s")
+                                } ?: run {
+                                    Log.d("WebFeatureExtractor", "Non-numeric value for $key: '$s'")
+                                    null
+                                }
+                            }
+                            else -> {
+                                Log.d("WebFeatureExtractor", "Unexpected type for $key: ${value?.javaClass?.name}")
                                 null
                             }
                         }
-                        else -> {
-                            Log.d("WebFeatureExtractor", "Unexpected type for $key: ${value?.javaClass?.name}")
+                    }
+
+                    // Log summary to quickly see how many nulls vs present values
+                    val presentCount = features.count { it.value != null }
+                    val nullCount = features.count { it.value == null }
+                    Log.d("WebFeatureExtractor", "Parsed features: total=${features.size}, present=$presentCount, null=$nullCount")
+                    callback(features)
                             null
                         }
                     }
@@ -758,19 +785,44 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     }
 
                     // 신용카드 폼 존재 여부
+                    // Improve credit card detection: check name/id/class/placeholder/label/aria, maxlength, pattern and form action
                     var hasCreditCardForm = false;
-                    for (var i = 0; i < forms.length; i++) {
-                        var inputs = forms[i].getElementsByTagName('input');
-                        for (var j = 0; j < inputs.length; j++) {
-                            var name = inputs[j].getAttribute('name') || '';
-                            var placeholder = inputs[j].getAttribute('placeholder') || '';
-                            if (name.includes('card') || name.includes('credit') ||
-                                placeholder.includes('card') || placeholder.includes('credit')) {
+                    var cardFieldRegex = /card|cc|cvc|cvv|pan|cardnumber|card-number|card_no|cardno|expiry|exp|card_exp|cardnumber/i;
+                    var paymentActionRegex = /(stripe|paypal|checkout|payment|billing|pay|square|authorize|adyen|payu|alipay|googlepay|checkout)/i;
+
+                    for (var i = 0; i < forms.length && !hasCreditCardForm; i++) {
+                        var f = forms[i];
+                        var inputs = f.getElementsByTagName('input');
+                        for (var j = 0; j < inputs.length && !hasCreditCardForm; j++) {
+                            var inp = inputs[j];
+                            var name = (inp.getAttribute('name') || '') + ' ' + (inp.getAttribute('id') || '') + ' ' + (inp.className || '');
+                            var placeholder = inp.getAttribute('placeholder') || '';
+                            var aria = inp.getAttribute('aria-label') || '';
+                            var labelText = '';
+                            try {
+                                var label = document.querySelector('label[for="' + inp.id + '"]');
+                                if (label) labelText = label.textContent || '';
+                            } catch (e) { }
+
+                            // If name/id/class/placeholder/aria/label contain card keywords
+                            if (cardFieldRegex.test(name) || cardFieldRegex.test(placeholder) || cardFieldRegex.test(aria) || cardFieldRegex.test(labelText)) {
                                 hasCreditCardForm = true;
                                 break;
                             }
+
+                            // Check maxlength or pattern for card numbers
+                            var ml = inp.maxLength; // -1 if not set
+                            if (ml && ml >= 13 && ml <= 19) {
+                                hasCreditCardForm = true; break;
+                            }
+                            var pattern = inp.getAttribute('pattern') || '';
+                            if (/\\d{13,19}/.test(pattern)) { hasCreditCardForm = true; break; }
                         }
-                        if (hasCreditCardForm) break;
+
+                        var action = (f.getAttribute('action') || '') + ' ' + (f.textContent || '');
+                        if (paymentActionRegex.test(action)) {
+                            hasCreditCardForm = true; break;
+                        }
                     }
 
                     // URL 길이 및 특수문자 수
@@ -852,7 +904,18 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.login_form = hasLoginForm ? 1 : 0;
                     features.external_favicon = document.querySelector('link[rel="icon"][href^="http"]') ? 1 : 0;
                     features.links_in_tags = null; // 구현 어려움
-                    features.submit_email = hasCreditCardForm ? 1 : 0; // 임시
+                    // Improve submit_email detection: treat as email if there is an input type='email'
+                    var hasEmailSubmit = false;
+                    for (var i = 0; i < forms.length; i++) {
+                        var inputs = forms[i].getElementsByTagName('input');
+                        for (var j = 0; j < inputs.length; j++) {
+                            var t = (inputs[j].getAttribute('type') || '').toLowerCase();
+                            var name = (inputs[j].getAttribute('name') || '').toLowerCase();
+                            if (t == 'email' || name.includes('email')) { hasEmailSubmit = true; break; }
+                        }
+                        if (hasEmailSubmit) break;
+                    }
+                    features.submit_email = hasEmailSubmit ? 1 : 0;
                     features.ratio_intMedia = null; // 구현 어려움
                     features.ratio_extMedia = null; // 구현 어려움
                     features.sfh = null; // 구현 어려움
