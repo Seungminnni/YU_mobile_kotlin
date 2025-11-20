@@ -427,7 +427,7 @@ class MainActivity : AppCompatActivity() {
         lastDisplayedUrl = url
         urlPreviewText.text = formatUrlPreview(url)
         urlSuggestionCard.visibility = View.VISIBLE
-        cameraHintText.text = "감지된 URL을 분석하려면 '가상분석'을 누르세요"
+        cameraHintText.text = "감지된 URL을 분석하려면 \'가상분석\'을 누르세요"
     }
 
     private fun clearPendingUrl(allowSameUrlAgain: Boolean = false) {
@@ -627,66 +627,45 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
     @JavascriptInterface
     fun receiveFeatures(featuresJson: String) {
         try {
+            // Raw JSON from WebView — log it for debugging so you can inspect exactly
+            // what values the JS extracted (including nulls or strings).
+            Log.d("WebFeatureExtractor", "RAW_FEATURES_JSON: $featuresJson")
+
             val jsonObject = JSONObject(featuresJson)
-            // Accept nullable floats so we can distinguish missing values
             val features = mutableMapOf<String, Float?>()
             val keys = jsonObject.keys()
             while (keys.hasNext()) {
                 val key = keys.next()
-                val value = jsonObject.get(key)
-                // JSON null -> Kotlin null
+                // If JS explicitly put null, treat as Kotlin null
                 if (jsonObject.isNull(key)) {
                     features[key] = null
-                } else {
-                    // Raw JSON from WebView — log it for debugging so you can inspect exactly
-                    // what values the JS extracted (including nulls or strings).
-                    Log.d("WebFeatureExtractor", "RAW_FEATURES_JSON: $featuresJson")
+                    continue
+                }
 
-                    val jsonObject = JSONObject(featuresJson)
-                    val features = mutableMapOf<String, Float?>()
-                    val keys = jsonObject.keys()
-                    while (keys.hasNext()) {
-                        val key = keys.next()
-                        // If JS explicitly put null, treat as Kotlin null
-                        if (jsonObject.isNull(key)) {
-                            features[key] = null
-                            continue
-                        }
-
-                        val value = jsonObject.get(key)
-                        features[key] = when (value) {
-                            is Number -> value.toFloat()
-                            is Boolean -> if (value) 1.0f else 0.0f
-                            is String -> {
-                                val s = value.trim()
-                                s.toFloatOrNull()?.also {
-                                    Log.d("WebFeatureExtractor", "Parsed numeric-string for $key: $s")
-                                } ?: run {
-                                    Log.d("WebFeatureExtractor", "Non-numeric value for $key: '$s'")
-                                    null
-                                }
-                            }
-                            else -> {
-                                Log.d("WebFeatureExtractor", "Unexpected type for $key: ${value?.javaClass?.name}")
-                                null
-                            }
-                        }
-                    }
-
-                    // Log summary to quickly see how many nulls vs present values
-                    val presentCount = features.count { it.value != null }
-                    val nullCount = features.count { it.value == null }
-                    Log.d("WebFeatureExtractor", "Parsed features: total=${features.size}, present=$presentCount, null=$nullCount")
-                    callback(features)
+                val value = jsonObject.get(key)
+                features[key] = when (value) {
+                    is Number -> value.toFloat()
+                    is Boolean -> if (value) 1.0f else 0.0f
+                    is String -> {
+                        val s = value.trim()
+                        s.toFloatOrNull()?.also {
+                            Log.d("WebFeatureExtractor", "Parsed numeric-string for $key: $s")
+                        } ?: run {
+                            Log.d("WebFeatureExtractor", "Non-numeric value for $key: '$s'")
                             null
                         }
                     }
+                    else -> {
+                        Log.d("WebFeatureExtractor", "Unexpected type for $key: ${value?.javaClass?.name}")
+                        null
+                    }
                 }
             }
-            // Log a compact summary of what arrived (types and missing)
-            val nullList = features.filterValues { it == null }.keys
-            val presentList = features.filterValues { it != null }.keys
-            Log.d("WebFeatureExtractor", "Received features: total=${features.size}, present=${presentList.size}, null=${nullList.size}")
+
+            // Log summary to quickly see how many nulls vs present values
+            val presentCount = features.count { it.value != null }
+            val nullCount = features.count { it.value == null }
+            Log.d("WebFeatureExtractor", "Parsed features: total=${features.size}, present=$presentCount, null=$nullCount")
             callback(features)
         } catch (e: Exception) {
             Log.e("WebFeatureExtractor", "피처 파싱 실패", e)
@@ -816,7 +795,7 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                                 hasCreditCardForm = true; break;
                             }
                             var pattern = inp.getAttribute('pattern') || '';
-                            if (/\\d{13,19}/.test(pattern)) { hasCreditCardForm = true; break; }
+                            if (/\d{13,19}/.test(pattern)) { hasCreditCardForm = true; break; }
                         }
 
                         var action = (f.getAttribute('action') || '') + ' ' + (f.textContent || '');
@@ -1026,26 +1005,25 @@ class PhishingDetector(private val context: Context) {
             0.5
         }
 
-            val isPhishing = confidenceScore >= phishingThreshold
+        val isPhishing = confidenceScore >= phishingThreshold
 
-            // Log which features are null or sentinel for diagnostics
-            val nullKeys = features.filter { it.value == null }.map { it.key }
-            val sentinelKeys = features.filter { it.value == -9999.0f }.map { it.key }
-            if (nullKeys.isNotEmpty()) {
-                Log.d("WebFeatureExtractor", "NULL(미구현) 피처 목록: ${'$'}{nullKeys.joinToString(", ")}")
+        // Log which features are null or sentinel for diagnostics
+        val nullKeys = features.filter { it.value == null }.map { it.key }
+        if (nullKeys.isNotEmpty()) {
+            Log.d("WebFeatureExtractor", "NULL(미구현) 피처 목록: ${nullKeys.joinToString(", ")}")
+        }
+
+        // 위험 요인 수집 (ML 기반)
+        if (mlPrediction >= 0.0f) {
+            riskFactors.add("ML 예측 점수: ${(confidenceScore * 100).toInt()}%")
+            if (isPhishing) {
+                riskFactors.add("ML 모델이 피싱으로 판정")
+            } else {
+                riskFactors.add("ML 모델이 안전으로 판정")
             }
-            if (sentinelKeys.isNotEmpty()) {
-                Log.d("WebFeatureExtractor", "Sentinel(미구현) 피처 목록: ${'$'}{sentinelKeys.joinToString(", ")}")
-            }
-            // NULL 값(미구현) 및 sentinel(-9999) 값이 있는 피처를 로그로 남겨서 데이터 수집 시 어떤 피처가 미구현인지 파악
-            val nullKeys = features.filter { it.value == null }.map { it.key }
-            val sentinelKeys = features.filter { it.value == -9999.0f }.map { it.key }
-            if (nullKeys.isNotEmpty()) {
-                Log.d("WebFeatureExtractor", "NULL(미구현) 피처 목록: ${'$'}{nullKeys.joinToString(", ")}")
-            }
-            if (sentinelKeys.isNotEmpty()) {
-                Log.d("WebFeatureExtractor", "Sentinel(미구현) 피처 목록: ${'$'}{sentinelKeys.joinToString(", ")}")
-            }
+        } else {
+            riskFactors.add("ML 모델 로드 실패 - 기본 판정 사용")
+        }
 
         // URL 기반 위험 요인 추가
         if (urlHeuristics != null) {
@@ -1111,7 +1089,7 @@ class PhishingDetector(private val context: Context) {
         }
 
         apply(0.1, normalizedUrl.contains("@")) {
-            "'@' 문자를 포함한 URL"
+            "\'@\' 문자를 포함한 URL"
         }
 
         apply(0.1, scheme.equals("http", ignoreCase = true)) {
