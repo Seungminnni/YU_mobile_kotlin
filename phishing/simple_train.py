@@ -38,7 +38,7 @@ def load_and_preprocess_data():
             df[c] = ser
             numeric_cols.append(c)
 
-    # 결측치 처리
+    # 결측치 처리 ###메디안 확인 해야함
     for c in numeric_cols:
         med = float(df[c].dropna().median()) if df[c].notna().any() else 0.0
         df[c] = df[c].fillna(med).astype("float32")

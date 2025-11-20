@@ -628,17 +628,38 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
     fun receiveFeatures(featuresJson: String) {
         try {
             val jsonObject = JSONObject(featuresJson)
-            val features = mutableMapOf<String, Float>()
+            // Accept nullable floats so we can distinguish missing values
+            val features = mutableMapOf<String, Float?>()
             val keys = jsonObject.keys()
             while (keys.hasNext()) {
                 val key = keys.next()
                 val value = jsonObject.get(key)
-                features[key] = when (value) {
-                    is Number -> value.toFloat()
-                    is Boolean -> if (value) 1.0f else 0.0f
-                    else -> 0.0f
+                // JSON null -> Kotlin null
+                if (jsonObject.isNull(key)) {
+                    features[key] = null
+                } else {
+                    features[key] = when (value) {
+                        is Number -> value.toFloat()
+                        is Boolean -> if (value) 1.0f else 0.0f
+                        is String -> {
+                            // Try to parse numeric strings, otherwise log and set null
+                            val s = value.trim()
+                            s.toFloatOrNull()?.also { Log.d("WebFeatureExtractor", "Parsed numeric-string for $key: $s") } ?: run {
+                                Log.d("WebFeatureExtractor", "Non-numeric value for $key: '$s'")
+                                null
+                            }
+                        }
+                        else -> {
+                            Log.d("WebFeatureExtractor", "Unexpected type for $key: ${value?.javaClass?.name}")
+                            null
+                        }
+                    }
                 }
             }
+            // Log a compact summary of what arrived (types and missing)
+            val nullList = features.filterValues { it == null }.keys
+            val presentList = features.filterValues { it != null }.keys
+            Log.d("WebFeatureExtractor", "Received features: total=${features.size}, present=${presentList.size}, null=${nullList.size}")
             callback(features)
         } catch (e: Exception) {
             Log.e("WebFeatureExtractor", "피처 파싱 실패", e)
@@ -781,11 +802,11 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.nb_semicolumn = (url.match(/;/g) || []).length;
                     features.nb_dollar = (url.match(/\$/g) || []).length;
                     features.nb_space = (url.match(/ /g) || []).length;
-                    features.nb_www = url.includes('www') ? 1 : 0;
-                    features.nb_com = url.includes('.com') ? 1 : 0;
+                    features.nb_www = (url.match(/www/g) || []).length;
+                    features.nb_com = (url.match(/\.com/g) || []).length; // 이진이 아닌데 이진으로 보고있음
                     features.nb_dslash = (url.match(/\/\//g) || []).length;
-                    features.http_in_path = url.includes('http') ? 1 : 0;
-                    features.https_token = url.includes('https') ? 1 : 0;
+                    features.http_in_path = (url.match(/http/g) || []).length;
+                    features.https_token = (url.match(/https/g) || []).length;
                     features.ratio_digits_url = (url.match(/\d/g) || []).length / url.length;
                     features.ratio_digits_host = (window.location.hostname.match(/\d/g) || []).length / window.location.hostname.length;
                     features.punycode = window.location.hostname.includes('xn--') ? 1 : 0;
@@ -794,14 +815,14 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.tld_in_subdomain = null; // 구현 어려움
                     features.abnormal_subdomain = null; // 구현 어려움
                     features.nb_subdomains = window.location.hostname.split('.').length - 2;
-                    features.prefix_suffix = window.location.hostname.includes('-') ? 1 : 0;
+                    features.prefix_suffix = (window.location.hostname.match(/-/g) || []).length;
                     features.random_domain = null; // 구현 어려움
                     features.shortening_service = null; // 구현 어려움
                     features.path_extension = null; // 구현 어려움
                     features.nb_redirection = null; // 구현 어려움
                     features.nb_external_redirection = null; // 구현 어려움
 
-                    // 페이지 콘텐츠 기반
+                    // 페이지 콘텐츠 기반  !!삼항연산자 혹은 조건문으로 디버ㅗ깅을 해야함
                     features.length_words_raw = url.split(/[^a-zA-Z0-9]/).filter(w => w).length;
                     features.char_repeat = null; // 구현 어려움
                     features.shortest_words_raw = Math.min(...url.split(/[^a-zA-Z0-9]/).filter(w => w).map(w => w.length)) || 0;
@@ -813,7 +834,7 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.avg_words_raw = url.split(/[^a-zA-Z0-9]/).filter(w => w).reduce((a, b) => a + b.length, 0) / url.split(/[^a-zA-Z0-9]/).filter(w => w).length || 0;
                     features.avg_word_host = window.location.hostname.split(/[^a-zA-Z0-9]/).filter(w => w).reduce((a, b) => a + b.length, 0) / window.location.hostname.split(/[^a-zA-Z0-9]/).filter(w => w).length || 0;
                     features.avg_word_path = window.location.pathname.split(/[^a-zA-Z0-9]/).filter(w => w).reduce((a, b) => a + b.length, 0) / window.location.pathname.split(/[^a-zA-Z0-9]/).filter(w => w).length || 0;
-                    features.phish_hints = null; // 구현 어려움
+                    features.phish_hints = null; // 구현 어려움 삼항연산자 혹은 조건문으로 디버ㅗ깅을 해야함
                     features.domain_in_brand = null; // 구현 어려움
                     features.brand_in_subdomain = null; // 구현 어려움
                     features.brand_in_path = null; // 구현 어려움
@@ -942,19 +963,17 @@ class PhishingDetector(private val context: Context) {
             0.5
         }
 
-        val isPhishing = confidenceScore >= phishingThreshold
-                // Detect JSON nulls explicitly
-                if (jsonObject.isNull(key)) {
-                    features[key] = null
-                } else {
-                    val value = jsonObject.get(key)
-                    features[key] = when (value) {
-                        is Number -> value.toFloat()
-                        is Boolean -> if (value) 1.0f else 0.0f
-                        else -> null
-                    }
-                }
-            } else {
+            val isPhishing = confidenceScore >= phishingThreshold
+
+            // Log which features are null or sentinel for diagnostics
+            val nullKeys = features.filter { it.value == null }.map { it.key }
+            val sentinelKeys = features.filter { it.value == -9999.0f }.map { it.key }
+            if (nullKeys.isNotEmpty()) {
+                Log.d("WebFeatureExtractor", "NULL(미구현) 피처 목록: ${'$'}{nullKeys.joinToString(", ")}")
+            }
+            if (sentinelKeys.isNotEmpty()) {
+                Log.d("WebFeatureExtractor", "Sentinel(미구현) 피처 목록: ${'$'}{sentinelKeys.joinToString(", ")}")
+            }
             // NULL 값(미구현) 및 sentinel(-9999) 값이 있는 피처를 로그로 남겨서 데이터 수집 시 어떤 피처가 미구현인지 파악
             val nullKeys = features.filter { it.value == null }.map { it.key }
             val sentinelKeys = features.filter { it.value == -9999.0f }.map { it.key }
