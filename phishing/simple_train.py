@@ -13,8 +13,14 @@ from sklearn.utils import shuffle
 # TensorFlow는 마지막에 import (메모리 절약)
 def load_and_preprocess_data():
     """데이터 로드 및 전처리"""
-    print("데이터 로드 중...")
-    df = pd.read_csv("phishing_data.csv")
+    print("데이터 로드 중... (우선순위: phishing_data_tflite_ready.csv -> phishing_data.csv)")
+    # Prefer using the TFLite-ready dataset if present so feature ordering matches mobile
+    if os.path.exists("phishing_data_tflite_ready.csv"):
+        df = pd.read_csv("phishing_data_tflite_ready.csv")
+        print("Using phishing_data_tflite_ready.csv")
+    else:
+        df = pd.read_csv("phishing_data.csv")
+        print("Using phishing_data.csv")
 
     if "url" in df.columns:
         df = df.drop(columns=["url"])

@@ -55,7 +55,6 @@
     "brand_in_subdomain",
     "brand_in_path",
     "suspecious_tld",
-    "statistical_report",
     "nb_hyperlinks",
     "ratio_intHyperlinks",
     "ratio_extHyperlinks",
@@ -79,17 +78,10 @@
     "right_clic",
     "empty_title",
     "domain_in_title",
-    "domain_with_copyright",
-    "whois_registered_domain",
-    "domain_registration_length",
-    "domain_age",
-    "web_traffic",
-    "dns_record",
-    "google_index",
-    "page_rank"
+    "domain_with_copyright"
   ],
   "input_shape": [
-    87
+    79
   ],
   "normalization_layer": "norm_all"
 }

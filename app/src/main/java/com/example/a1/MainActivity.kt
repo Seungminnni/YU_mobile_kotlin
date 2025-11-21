@@ -72,6 +72,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var exitSandboxButton: Button
 
     private var currentUrl: String? = null
+    // dynamic, runtime counters to capture actual WebView redirect behaviour
+    private var dynamicTotalRedirects: Int = 0
+    private var dynamicExternalRedirects: Int = 0
+    private var lastNavigationUrlForDynamicCounters: String? = null
     private var pendingDetectedUrl: String? = null
     private var lastDisplayedUrl: String? = null
     private var imageCapture: ImageCapture? = null
@@ -210,6 +214,24 @@ class MainActivity : AppCompatActivity() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 super.onPageStarted(view, url, favicon)
                 resultTextView.text = "가상환경에서 웹페이지를 로드하는 중...\n⚠️ 이 페이지는 격리된 환경에서 실행됩니다"
+
+                // --- dynamic redirect counting ---
+                try {
+                    if (!url.isNullOrBlank()) {
+                        val prev = lastNavigationUrlForDynamicCounters
+                        if (prev != null && prev != url) {
+                            dynamicTotalRedirects += 1
+                            val prevHost = runCatching { URI(prev).host }.getOrNull()?.lowercase(Locale.ROOT)
+                            val curHost = runCatching { URI(url).host }.getOrNull()?.lowercase(Locale.ROOT)
+                            if (!prevHost.isNullOrBlank() && !curHost.isNullOrBlank() && prevHost != curHost) {
+                                dynamicExternalRedirects += 1
+                            }
+                        }
+                        lastNavigationUrlForDynamicCounters = url
+                    }
+                } catch (e: Exception) {
+                    Log.d(TAG, "dynamic-redirect-counter error", e)
+                }
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
@@ -265,6 +287,11 @@ class MainActivity : AppCompatActivity() {
         previewView.visibility = View.GONE
         webView.visibility = View.VISIBLE
         sandboxInfoPanel.visibility = View.VISIBLE
+
+        // reset dynamic counters for this session so we accurately capture redirects/errors
+        dynamicTotalRedirects = 0
+        dynamicExternalRedirects = 0
+        lastNavigationUrlForDynamicCounters = null
 
         enableSandboxScripts()
         resultTextView.text = "⚠️ JavaScript가 활성화된 가상환경에서 로드 중..."
@@ -472,7 +499,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun analyzeAndDisplayPhishingResult(features: WebFeatures) {
-        val analysisResult = phishingDetector.analyzePhishing(features, currentUrl)
+        // Merge dynamic runtime redirect counters into the feature map so ML sees real behaviour
+        val merged = features.toMutableMap()
+        try {
+            // override counts that JS might set or leave null
+            merged["nb_redirection"] = dynamicTotalRedirects.toFloat()
+            merged["nb_external_redirection"] = dynamicExternalRedirects.toFloat()
+            if (dynamicTotalRedirects == 0) {
+                merged["ratio_intRedirection"] = 0f
+                merged["ratio_extRedirection"] = 0f
+            } else {
+                val internal = (dynamicTotalRedirects - dynamicExternalRedirects)
+                merged["ratio_intRedirection"] = (internal.toFloat() / dynamicTotalRedirects.toFloat())
+                merged["ratio_extRedirection"] = (dynamicExternalRedirects.toFloat() / dynamicTotalRedirects.toFloat())
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "Failed to merge dynamic redirect counters", e)
+        }
+
+        Log.d(TAG, "dynamic redirects total=$dynamicTotalRedirects external=$dynamicExternalRedirects")
+
+        val analysisResult = phishingDetector.analyzePhishing(merged, currentUrl)
         isAnalyzingFeatures = false
         lastAnalyzedPageKey = analysisResult.inspectedUrl ?: currentUrl
         renderAnalysis(analysisResult)
@@ -679,33 +726,68 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     // 안전한 길이 계산 헬퍼: 빈 배열일 때 0 반환
                     function safeMin(words) {
                         if (!words || words.length === 0) return 0;
-                        var minLen = words[0].length;
-                        for (var i = 1; i < words.length; i++) {
-                            if (words[i].length < minLen) {
-                                minLen = words[i].length;
+                        // If array contains numbers (lengths) treat elements as numbers
+                        if (typeof words[0] === 'number') {
+                            var minNum = Infinity;
+                            for (var i = 0; i < words.length; i++) {
+                                var v = Number(words[i]);
+                                if (isFinite(v) && v < minNum) minNum = v;
                             }
+                            return (minNum === Infinity) ? 0 : minNum;
                         }
-                        return minLen;
+                        // Otherwise treat items as strings and use their lengths
+                        var minLen = Infinity;
+                        for (var i = 0; i < words.length; i++) {
+                            var cur = words[i];
+                            var l = (cur == null) ? Infinity : (typeof cur === 'number' ? cur : String(cur).length);
+                            if (l < minLen) minLen = l;
+                        }
+                        return (minLen === Infinity) ? 0 : minLen;
                     }
 
                     function safeMax(words) {
                         if (!words || words.length === 0) return 0;
-                        var maxLen = words[0].length;
-                        for (var i = 1; i < words.length; i++) {
-                            if (words[i].length > maxLen) {
-                                maxLen = words[i].length;
+                        // If numbers (precomputed lengths) provided, return numeric max
+                        if (typeof words[0] === 'number') {
+                            var maxNum = -Infinity;
+                            for (var i = 0; i < words.length; i++) {
+                                var v = Number(words[i]);
+                                if (isFinite(v) && v > maxNum) maxNum = v;
                             }
+                            return (maxNum === -Infinity) ? 0 : maxNum;
+                        }
+                        // Otherwise compute by string length
+                        var maxLen = 0;
+                        for (var i = 0; i < words.length; i++) {
+                            var cur = words[i];
+                            var l = (cur == null) ? 0 : (typeof cur === 'number' ? cur : String(cur).length);
+                            if (l > maxLen) maxLen = l;
                         }
                         return maxLen;
                     }
 
                     function safeAvg(words) {
                         if (!words || words.length === 0) return 0;
-                        var total = 0;
-                        for (var i = 0; i < words.length; i++) {
-                            total += words[i].length;
+                        // If array of numbers (lengths) is provided
+                        if (typeof words[0] === 'number') {
+                            var totalNum = 0;
+                            var cntNum = 0;
+                            for (var i = 0; i < words.length; i++) {
+                                var v = Number(words[i]);
+                                if (isFinite(v)) { totalNum += v; cntNum++; }
+                            }
+                            return cntNum === 0 ? 0 : (totalNum / cntNum);
                         }
-                        return total / words.length;
+                        var total = 0;
+                        var cnt = 0;
+                        for (var i = 0; i < words.length; i++) {
+                            var cur = words[i];
+                            if (cur != null) {
+                                var l = (typeof cur === 'number') ? cur : String(cur).length;
+                                if (isFinite(l)) { total += l; cnt++; }
+                            }
+                        }
+                        return cnt === 0 ? 0 : (total / cnt);
                     }
 
                     function normalizeUrl(raw) {
@@ -961,7 +1043,6 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.brand_in_subdomain = containsBrand(subdomainPart) ? 1 : 0;
                     features.brand_in_path = containsBrand(pathLower) ? 1 : 0;
                     features.suspecious_tld = ['xyz', 'top', 'icu'].includes(window.location.hostname.split('.').pop()) ? 1 : 0;
-                    features.statistical_report = null; // 구현 어려움
                     features.nb_hyperlinks = document.getElementsByTagName('a').length;
                     // 링크 비율 계산 (내부/외부/무효)
                     var anchors = Array.prototype.slice.call(document.querySelectorAll('a[href]'));
@@ -1059,14 +1140,7 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     // features.dns_record = null; // requires DNS lookup
                     // features.google_index = null; // requires search engine API
                     // features.page_rank = null; // requires external API
-                    // 이거 외부 통신 피처
-                    features.whois_registered_domain = null;
-                    features.domain_registration_length = null;
-                    features.domain_age = null;
-                    features.web_traffic = null;
-                    features.dns_record = null;
-                    features.google_index = null;
-                    features.page_rank = null;
+                    // 외부 통신 기반 피처들은 앱/서버 통합을 통해 수집해야 하므로 여기서는 제외합니다
 
                     // 기존 피처 유지 (호환성)
                     features.domNodeCount = domNodeCount;
@@ -1081,8 +1155,90 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.urlLength = urlLength;
                     features.specialCharCount = specialCharCount;
 
-                    // Android로 데이터 전송
-                    Android.receiveFeatures(JSON.stringify(features));
+                    // Android로 데이터 전송 — only include the exact feature set used by training
+                    var payload = {
+                        length_url: features.length_url,
+                        length_hostname: features.length_hostname,
+                        ip: features.ip,
+                        nb_dots: features.nb_dots,
+                        nb_hyphens: features.nb_hyphens,
+                        nb_at: features.nb_at,
+                        nb_qm: features.nb_qm,
+                        nb_and: features.nb_and,
+                        nb_or: features.nb_or,
+                        nb_eq: features.nb_eq,
+                        nb_underscore: features.nb_underscore,
+                        nb_tilde: features.nb_tilde,
+                        nb_percent: features.nb_percent,
+                        nb_slash: features.nb_slash,
+                        nb_star: features.nb_star,
+                        nb_colon: features.nb_colon,
+                        nb_comma: features.nb_comma,
+                        nb_semicolumn: features.nb_semicolumn,
+                        nb_dollar: features.nb_dollar,
+                        nb_space: features.nb_space,
+                        nb_www: features.nb_www,
+                        nb_com: features.nb_com,
+                        nb_dslash: features.nb_dslash,
+                        http_in_path: features.http_in_path,
+                        https_token: features.https_token,
+                        ratio_digits_url: features.ratio_digits_url,
+                        ratio_digits_host: features.ratio_digits_host,
+                        punycode: features.punycode,
+                        port: features.port,
+                        tld_in_path: features.tld_in_path,
+                        tld_in_subdomain: features.tld_in_subdomain,
+                        abnormal_subdomain: features.abnormal_subdomain,
+                        nb_subdomains: features.nb_subdomains,
+                        prefix_suffix: features.prefix_suffix,
+                        random_domain: features.random_domain,
+                        shortening_service: features.shortening_service,
+                        path_extension: features.path_extension,
+                        nb_redirection: features.nb_redirection,
+                        nb_external_redirection: features.nb_external_redirection,
+                        length_words_raw: features.length_words_raw,
+                        char_repeat: features.char_repeat,
+                        shortest_words_raw: features.shortest_words_raw,
+                        shortest_word_host: features.shortest_word_host,
+                        shortest_word_path: features.shortest_word_path,
+                        longest_words_raw: features.longest_words_raw,
+                        longest_word_host: features.longest_word_host,
+                        longest_word_path: features.longest_word_path,
+                        avg_words_raw: features.avg_words_raw,
+                        avg_word_host: features.avg_word_host,
+                        avg_word_path: features.avg_word_path,
+                        phish_hints: features.phish_hints,
+                        domain_in_brand: features.domain_in_brand,
+                        brand_in_subdomain: features.brand_in_subdomain,
+                        brand_in_path: features.brand_in_path,
+                        suspecious_tld: features.suspecious_tld,
+                        nb_hyperlinks: features.nb_hyperlinks,
+                        ratio_intHyperlinks: features.ratio_intHyperlinks,
+                        ratio_extHyperlinks: features.ratio_extHyperlinks,
+                        ratio_nullHyperlinks: features.ratio_nullHyperlinks,
+                        nb_extCSS: features.nb_extCSS,
+                        ratio_intRedirection: features.ratio_intRedirection,
+                        ratio_extRedirection: features.ratio_extRedirection,
+                        ratio_intErrors: features.ratio_intErrors,
+                        ratio_extErrors: features.ratio_extErrors,
+                        login_form: features.login_form,
+                        external_favicon: features.external_favicon,
+                        links_in_tags: features.links_in_tags,
+                        submit_email: features.submit_email,
+                        ratio_intMedia: features.ratio_intMedia,
+                        ratio_extMedia: features.ratio_extMedia,
+                        sfh: features.sfh,
+                        iframe: features.iframe,
+                        popup_window: features.popup_window,
+                        safe_anchor: features.safe_anchor,
+                        onmouseover: features.onmouseover,
+                        right_clic: features.right_clic,
+                        empty_title: features.empty_title,
+                        domain_in_title: features.domain_in_title,
+                        domain_with_copyright: features.domain_with_copyright
+                    };
+
+                    Android.receiveFeatures(JSON.stringify(payload));
                 } catch (e) {
                     console.error('피처 추출 중 오류:', e);
                     Android.receiveFeatures(JSON.stringify({
@@ -1105,7 +1261,7 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
     }
 }
 
-// 웹페이지 피처 데이터 클래스 (87개 피처를 Map으로 저장)
+// 웹페이지 피처 데이터 클래스 (79개 피처를 Map으로 저장)
 typealias WebFeatures = Map<String, Float?>
 
 // 논문에서 제안하는 규칙 기반 피싱 탐지 시스템
