@@ -107,7 +107,8 @@ class TFLitePhishingPredictor(private val context: Context) {
             val inputArray = webFeaturesToFloatArray(features)
             val outputBuffer = TensorBuffer.createFixedSize(intArrayOf(1, 1), DataType.FLOAT32)
 
-            interpreter?.run(inputArray, outputBuffer.buffer)
+            interpreter?.run(arrayOf(inputArray), outputBuffer.buffer)
+            // 이거 잘 봐야 함
 
             val result = outputBuffer.floatArray[0]
             Log.d(TAG, "ML 예측 결과: $result")
