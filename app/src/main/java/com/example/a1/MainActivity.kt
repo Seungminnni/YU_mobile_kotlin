@@ -597,17 +597,26 @@ class MainActivity : AppCompatActivity() {
 
             val features = analysisResult.features
             if (features != null) {
+                // helper: flexible key lookup because JS payloads / model assets sometimes mix snake_case / camelCase
+                fun getFeatureFloat(vararg keys: String): Float? {
+                    for (k in keys) {
+                        if (features.containsKey(k)) return features[k]
+                    }
+                    return null
+                }
                 append("\n📋 WebView 피처 분석:\n")
-                append("• DOM 노드 수: ${features["domNodeCount"]?.toInt() ?: 0}\n")
-                append("• iframe 개수: ${features["iframeCount"]?.toInt() ?: 0}\n")
-                append("• 외부 도메인 form: ${features["externalDomainFormCount"]?.toInt() ?: 0}\n")
-                append("• base64 스크립트: ${features["base64ScriptCount"]?.toInt() ?: 0}\n")
-                append("• 이벤트 리스너: ${features["eventListenerCount"]?.toInt() ?: 0}\n")
-                append("• 의심스러운 스크립트: ${features["suspiciousScriptCount"]?.toInt() ?: 0}\n")
-                append("• 로그인 폼: ${if (features["hasLoginForm"] == 1.0f) "있음" else "없음"}\n")
-                append("• 신용카드 폼: ${if (features["hasCreditCardForm"] == 1.0f) "있음" else "없음"}\n")
-                append("• URL 길이: ${features["urlLength"]?.toInt() ?: 0}\n")
-                append("• 특수문자 수: ${features["specialCharCount"]?.toInt() ?: 0}\n")
+                append("• DOM 노드 수: ${getFeatureFloat("domNodeCount", "dom_node_count")?.toInt() ?: 0}\n")
+                // JS may send iframe or iframeCount — check both
+                append("• iframe 개수: ${getFeatureFloat("iframe", "iframeCount")?.toInt() ?: 0}\n")
+                append("• 외부 도메인 form: ${getFeatureFloat("externalDomainFormCount", "external_domain_form_count")?.toInt() ?: 0}\n")
+                append("• base64 스크립트: ${getFeatureFloat("base64ScriptCount", "base64_script_count")?.toInt() ?: 0}\n")
+                append("• 이벤트 리스너: ${getFeatureFloat("eventListenerCount", "event_listener_count")?.toInt() ?: 0}\n")
+                append("• 의심스러운 스크립트: ${getFeatureFloat("suspiciousScriptCount", "suspicious_script_count")?.toInt() ?: 0}\n")
+                append("• 로그인 폼: ${if ((getFeatureFloat("hasLoginForm", "has_login_form") ?: 0f) == 1.0f) "있음" else "없음"}\n")
+                append("• 신용카드 폼: ${if ((getFeatureFloat("hasCreditCardForm", "has_credit_card_form") ?: 0f) == 1.0f) "있음" else "없음"}\n")
+                // prefer the model asset names (length_url) but accept alternatives (urlLength)
+                append("• URL 길이: ${getFeatureFloat("length_url", "urlLength", "url_length")?.toInt() ?: 0}\n")
+                append("• 특수문자 수: ${getFeatureFloat("specialCharCount", "special_char_count")?.toInt() ?: 0}\n")
             }
 
             if (analysisResult.riskFactors.isNotEmpty()) {
@@ -708,7 +717,7 @@ class MainActivity : AppCompatActivity() {
         private const val NO_URL_WARNING_KEY = "__NO_URL__"
         private const val DEFAULT_CAMERA_HINT = "QR을 비추면 위협 URL이 여기에 나타납니다"
         // 디버그용으로 자동 분석할 URL (예: "https://phish.example.com"), 주석 해제 후 값 입력
-        private const val DEBUG_AUTO_LAUNCH_URL = "https://www.naver.com"
+        private const val DEBUG_AUTO_LAUNCH_URL = "https://github.com/"
     }
 
     private fun maybeLaunchDebugUrl() {
