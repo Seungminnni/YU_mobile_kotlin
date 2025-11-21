@@ -83,5 +83,7 @@
   "input_shape": [
     79
   ],
-  "normalization_layer": "norm_all"
+  "normalization_layer": "norm_all",
+  "labeling": "both",
+  "uncertainty_notify_eps": 0.05
 }
