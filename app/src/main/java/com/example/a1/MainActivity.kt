@@ -1314,7 +1314,9 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                         right_clic: features.right_clic,
                         empty_title: features.empty_title,
                         domain_in_title: features.domain_in_title,
-                        domain_with_copyright: features.domain_with_copyright
+                        domain_with_copyright: features.domain_with_copyright,
+                        // diagnostic: DOM node count (page complexity) — currently not part of model input
+                        domNodeCount: features.domNodeCount // 진단용 근데 이걸로 하니까 값이 뜸
                     };
 
                     Android.receiveFeatures(JSON.stringify(payload));
