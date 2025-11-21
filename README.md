@@ -13,12 +13,50 @@ QR 코드에서 추출한 URL을 모바일 샌드박스(WebView)에서 격리 �
 
 ## 프로젝트 구조
 ```
+build.gradle.kts
+gradle.properties
+gradlew
+gradlew.bat
+local.properties
+README.md
+settings.gradle.kts
+
 app/
- └─ src/main/
-     ├─ java/com/example/a1/MainActivity.kt   # UI, 카메라, 샌드박스, 탐지 로직
-     ├─ res/layout/activity_main.xml          # 카메라 프리뷰·WebView·결과 패널
-     └─ res/values/*                          # 문자열, 테마
-build.gradle.kts                              # CameraX, ML Kit 의존성
+   ├─ build.gradle.kts
+   ├─ proguard-rules.pro
+   ├─ build/                                # 빌드 산출물 (IDE/Gradle용, 보통 무시)
+   │  ├─ generated/
+   │  ├─ intermediates/
+   │  ├─ kotlin/
+   │  └─ outputs/
+   └─ src/
+       ├─ androidTest/
+       │  └─ java/
+       ├─ main/
+       │  ├─ AndroidManifest.xml
+       │  ├─ assets/                           # 앱 내 에셋 (ex: feature_info.json)
+       │  ├─ java/                             # 주요 소스: `com/example/a1/MainActivity.kt` 등
+       │  └─ res/                              # 레이아웃 / values / drawable
+       └─ test/
+
+gradle/
+   ├─ libs.versions.toml
+   └─ wrapper/
+       └─ gradle-wrapper.properties
+
+phishing/
+   ├─ data preprocessing.ipynb
+   ├─ feature_info.json                      # training ⇄ mobile 피처 스키마
+   ├─ phishing_data.csv
+   ├─ phishing_data_tflite_ready.csv         # tflite-ready CSV (모델 훈련용, 일치된 컬럼 순서)
+   ├─ phishing_model.tflite                  # (optional) on-device 모델 바이너리
+   ├─ simple_train.py                        # 학습 스크립트 (tflite-ready prefer)
+   ├─ test_phishing.csv
+   ├─ test_not-phishing.csv
+   ├─ last.csv
+   ├─ README.md                              # phishing-specific 설명/실험 노트
+   └─ other notebooks (Untitled.ipynb ...)
+
 ```
 
 ## 실행 방법
