@@ -75,6 +75,9 @@ class MainActivity : AppCompatActivity() {
     // dynamic, runtime counters to capture actual WebView redirect behaviour
     private var dynamicTotalRedirects: Int = 0
     private var dynamicExternalRedirects: Int = 0
+    // dynamic error counters to capture resource/http/js/runtime errors
+    private var dynamicTotalErrors: Int = 0
+    private var dynamicExternalErrors: Int = 0
     private var lastNavigationUrlForDynamicCounters: String? = null
     private var pendingDetectedUrl: String? = null
     private var lastDisplayedUrl: String? = null
@@ -232,6 +235,13 @@ class MainActivity : AppCompatActivity() {
                 } catch (e: Exception) {
                     Log.d(TAG, "dynamic-redirect-counter error", e)
                 }
+                // reset per-navigation errors as we start a new page
+                try {
+                    dynamicTotalErrors = 0
+                    dynamicExternalErrors = 0
+                } catch (e: Exception) {
+                    Log.d(TAG, "dynamic-error-counter reset failed", e)
+                }
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
@@ -246,6 +256,36 @@ class MainActivity : AppCompatActivity() {
                     extractWebFeatures()
                 } else if (!webView.settings.javaScriptEnabled) {
                     resultTextView.text = "🔒 보안 모드: 피처 분석을 위해 JavaScript가 필요합니다"
+                }
+            }
+
+            override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
+                super.onReceivedError(view, request, error)
+                try {
+                    dynamicTotalErrors += 1
+                    val reqUrl = request?.url?.toString()
+                    val reqHost = runCatching { reqUrl?.let { URI(it).host } }.getOrNull()?.lowercase(Locale.ROOT)
+                    val curHost = runCatching { currentUrl?.let { URI(it).host } }.getOrNull()?.lowercase(Locale.ROOT)
+                    if (!reqHost.isNullOrBlank() && !curHost.isNullOrBlank() && reqHost != curHost) {
+                        dynamicExternalErrors += 1
+                    }
+                } catch (e: Exception) {
+                    Log.d(TAG, "onReceivedError counter failed", e)
+                }
+            }
+
+            override fun onReceivedHttpError(view: WebView?, request: android.webkit.WebResourceRequest?, errorResponse: android.webkit.WebResourceResponse?) {
+                super.onReceivedHttpError(view, request, errorResponse)
+                try {
+                    dynamicTotalErrors += 1
+                    val reqUrl = request?.url?.toString()
+                    val reqHost = runCatching { reqUrl?.let { URI(it).host } }.getOrNull()?.lowercase(Locale.ROOT)
+                    val curHost = runCatching { currentUrl?.let { URI(it).host } }.getOrNull()?.lowercase(Locale.ROOT)
+                    if (!reqHost.isNullOrBlank() && !curHost.isNullOrBlank() && reqHost != curHost) {
+                        dynamicExternalErrors += 1
+                    }
+                } catch (e: Exception) {
+                    Log.d(TAG, "onReceivedHttpError counter failed", e)
                 }
             }
 
@@ -517,9 +557,25 @@ class MainActivity : AppCompatActivity() {
             Log.d(TAG, "Failed to merge dynamic redirect counters", e)
         }
 
-        Log.d(TAG, "dynamic redirects total=$dynamicTotalRedirects external=$dynamicExternalRedirects")
+        Log.d(TAG, "dynamic redirects total=$dynamicTotalRedirects external=$dynamicExternalRedirects | errors total=$dynamicTotalErrors external=$dynamicExternalErrors")
 
-        val analysisResult = phishingDetector.analyzePhishing(merged, currentUrl)
+            // merge dynamic error counters as well (overwrite any JS-provided values)
+            try {
+                merged["nb_errors"] = dynamicTotalErrors.toFloat()
+                merged["nb_external_errors"] = dynamicExternalErrors.toFloat()
+                if (dynamicTotalErrors == 0) {
+                    merged["ratio_intErrors"] = 0f
+                    merged["ratio_extErrors"] = 0f
+                } else {
+                    val internalErrors = (dynamicTotalErrors - dynamicExternalErrors)
+                    merged["ratio_intErrors"] = internalErrors.toFloat() / dynamicTotalErrors.toFloat()
+                    merged["ratio_extErrors"] = dynamicExternalErrors.toFloat() / dynamicTotalErrors.toFloat()
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Failed to merge dynamic error counters", e)
+            }
+
+            val analysisResult = phishingDetector.analyzePhishing(merged, currentUrl)
         isAnalyzingFeatures = false
         lastAnalyzedPageKey = analysisResult.inspectedUrl ?: currentUrl
         renderAnalysis(analysisResult)
@@ -1073,7 +1129,21 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.ratio_extErrors = null; // 구현 어려움
                     features.login_form = hasLoginForm ? 1 : 0;
                     features.external_favicon = document.querySelector('link[rel="icon"][href^="http"]') ? 1 : 0;
-                    features.links_in_tags = null; // 구현 어려움
+                    // links_in_tags: ratio of anchors that live inside common semantic tags
+                    // (nav, header, footer, article, section, aside, p, li)
+                    try {
+                        var containerTags = ['nav','header','footer','article','section','aside','p','li']
+                        var anchorsAllWithHref = Array.prototype.slice.call(document.querySelectorAll('a[href]'))
+                        var anchoredInTagsCount = 0
+                        for (var i = 0; i < anchorsAllWithHref.length; i++) {
+                            var el = anchorsAllWithHref[i]
+                            var ancestor = el.closest(containerTags.join(','))
+                            if (ancestor) anchoredInTagsCount++
+                        }
+                        features.links_in_tags = anchorsAllWithHref.length === 0 ? 0 : (anchoredInTagsCount / anchorsAllWithHref.length)
+                    } catch (e) {
+                        features.links_in_tags = 0
+                    }
                     // Improve submit_email detection: treat as email if there is an input type='email'
                     var hasEmailSubmit = false;
                     for (var i = 0; i < forms.length; i++) {
