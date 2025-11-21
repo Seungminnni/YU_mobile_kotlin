@@ -671,7 +671,7 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
             Log.e("WebFeatureExtractor", "피처 파싱 실패", e)
         }
     }
-
+// 
     fun getFeatureExtractionScript(): String {
         return """
             javascript:(function() {
@@ -716,7 +716,7 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                         }
                     }
                     // safeMin/safeMax/safeAvg are defined above and reused.
-                    // DOM 노드 수 계산
+                    // DOM 노드 수 계산 
                     var domNodeCount = document.getElementsByTagName('*').length;
 
                     // iframe 개수 계산
@@ -915,7 +915,7 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     } catch (perfErr) {}
                     features.nb_external_redirection = externalRedirects;
 
-                    // 페이지 콘텐츠 기반  !!삼항연산자 혹은 조건문으로 디버ㅗ깅을 해야함
+                    // 페이지 콘텐츠 기반  !!삼항연산자 혹은 조건문으로 디버깅을 해야함 -> 수정 하긴 했는데 검증
                     var pathWords = window.location.pathname.split(/[^a-zA-Z0-9]/).filter(function(w){ return w; });
                     var hostWords = window.location.hostname.split(/[^a-zA-Z0-9]/).filter(function(w){ return w; });
                     features.length_words_raw = pathTokens.length;
@@ -1059,6 +1059,7 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     // features.dns_record = null; // requires DNS lookup
                     // features.google_index = null; // requires search engine API
                     // features.page_rank = null; // requires external API
+                    // 이거 외부 통신 피처
                     features.whois_registered_domain = null;
                     features.domain_registration_length = null;
                     features.domain_age = null;
