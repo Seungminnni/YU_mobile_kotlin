@@ -1,0 +1,14 @@
+{
+  "embedding_dim": 16,
+  "input_dim": 21,
+  "val_accuracy": 0.7593848937132519,
+  "val_auc": 0.8005170263852592,
+  "test_accuracy": 0.7675260063319764,
+  "test_auc": 0.8005901954608001,
+  "training_samples": 6633,
+  "epochs_trained": 46,
+  "batch_size": 64,
+  "scaling": "none",
+  "feature_range": "[-1, 0, 1]",
+  "note": "No preprocessing required - use raw feature values"
+}
