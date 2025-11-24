@@ -1,0 +1,95 @@
+# 📊 성능 개선 실험 가이드
+
+## 즉시 시도 가능한 개선 (Cell 3 수정)
+
+### 실험 1: 기본 개선 (추천!)
+```python
+EMBEDDING_DIM = 32      # 16 → 32 (정보 보존 향상)
+BATCH_SIZE = 32         # 64 → 32 (일반화 향상)
+EPOCHS = 200            # 100 → 200 (수렴 시간 증가)
+LEARNING_RATE = 0.0005  # 0.001 → 0.0005 (안정적 학습)
+```
+예상 효과: Accuracy 91~93%, AUC 0.77~0.80
+
+### 실험 2: 공격적 개선
+```python
+EMBEDDING_DIM = 48      
+BATCH_SIZE = 32
+EPOCHS = 300
+LEARNING_RATE = 0.0003
+```
+예상 효과: Accuracy 92~94%, AUC 0.78~0.82
+
+### 실험 3: 프로토타입 개선 (Cell 10 수정)
+
+#### 3-1) Median 프로토타입 (이상치 제거)
+```python
+# Cell 10 수정
+prototype_legitimate = np.median(embeddings_train[legitimate_mask_train], axis=0)
+prototype_phishing = np.median(embeddings_train[phishing_mask_train], axis=0)
+```
+
+#### 3-2) 앙상블 프로토타입 (강력!)
+```python
+# Cell 10을 아래로 교체
+from sklearn.cluster import KMeans
+
+# K-means로 여러 중심 찾기
+n_prototypes = 5
+kmeans_legit = KMeans(n_clusters=n_prototypes, random_state=RANDOM_SEED)
+kmeans_phish = KMeans(n_clusters=n_prototypes, random_state=RANDOM_SEED)
+
+kmeans_legit.fit(embeddings_train[legitimate_mask_train])
+kmeans_phish.fit(embeddings_train[phishing_mask_train])
+
+prototypes_legitimate = kmeans_legit.cluster_centers_
+prototypes_phishing = kmeans_phish.cluster_centers_
+
+# Cell 11 분류 함수 수정
+def classify_by_similarity(embeddings, protos_legit, protos_phish):
+    # 각 프로토타입 그룹과의 최대 유사도
+    sim_legit_max = np.max([
+        cosine_similarity(embeddings, proto.reshape(1, -1)).flatten()
+        for proto in protos_legit
+    ], axis=0)
+    
+    sim_phish_max = np.max([
+        cosine_similarity(embeddings, proto.reshape(1, -1)).flatten()
+        for proto in protos_phish
+    ], axis=0)
+    
+    predictions = (sim_legit_max > sim_phish_max).astype(np.float32)
+    return predictions, sim_legit_max, sim_phish_max
+```
+예상 효과: Accuracy 92~95%, AUC 0.80~0.85
+
+### 실험 4: Triplet Loss 기반 학습 (고급)
+- Autoencoder 대신 Triplet Loss로 임베딩 학습
+- 같은 클래스는 가깝게, 다른 클래스는 멀게
+- 구현 복잡도: ⭐⭐⭐⭐
+
+## 🎯 추천 실험 순서
+
+1. **실험 1** 먼저 시도 (5분 소요)
+   - 성능 향상 없으면 → 실험 2
+   
+2. **실험 3-1** 시도 (1분 소요)
+   - Median 프로토타입으로 간단히 개선
+   
+3. **실험 3-2** 시도 (3분 소요)
+   - 앙상블 프로토타입으로 최종 성능 확인
+
+4. 만족스러우면 → TFLite 변환 후 모바일 통합
+
+## 💡 성능 목표
+
+- Accuracy 92% 이상
+- AUC 0.80 이상
+- Phishing Recall 90% 이상 (보안 중요!)
+
+## ⚠️ 주의사항
+
+- Overfitting 체크: Val과 Test 성능 차이 5% 이내
+- 학습 시간: EPOCHS 늘리면 비례 증가
+- 메모리: EMBEDDING_DIM 늘리면 메모리 증가
+
