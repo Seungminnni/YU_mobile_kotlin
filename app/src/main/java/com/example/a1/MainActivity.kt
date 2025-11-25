@@ -76,6 +76,11 @@ class MainActivity : AppCompatActivity() {
     private var dynamicTotalRedirects: Int = 0
     private var lastNavigationUrlForDynamicCounters: String? = null
     private var pendingDetectedUrl: String? = null
+    
+    // SSL 인증서 정보 (Native에서 추출)
+    private var hasSslError: Boolean = false
+    private var sslIssuerOrg: String? = null
+    private var sslValidDaysRemaining: Int = -1
     private var lastDisplayedUrl: String? = null
     private var imageCapture: ImageCapture? = null
     private var isWebViewVisible = false
@@ -330,6 +335,11 @@ class MainActivity : AppCompatActivity() {
                 super.onPageStarted(view, url, favicon)
                 resultTextView.text = "가상환경에서 웹페이지를 로드하는 중...\n⚠️ 이 페이지는 격리된 환경에서 실행됩니다"
 
+                // SSL 상태 초기화
+                hasSslError = false
+                sslIssuerOrg = null
+                sslValidDaysRemaining = -1
+
                 // --- dynamic redirect counting ---
                 try {
                     if (!url.isNullOrBlank()) {
@@ -341,6 +351,11 @@ class MainActivity : AppCompatActivity() {
                     }
                 } catch (e: Exception) {
                     Log.d(TAG, "dynamic-redirect-counter error", e)
+                }
+                
+                // HTTPS 연결의 인증서 정보 가져오기 (백그라운드에서)
+                if (url?.startsWith("https://") == true) {
+                    fetchSslCertificateInfo(url)
                 }
             }
 
@@ -366,6 +381,26 @@ class MainActivity : AppCompatActivity() {
                 }
                 Toast.makeText(this@MainActivity, "가상환경에서 허용되지 않는 URL입니다", Toast.LENGTH_SHORT).show()
                 return true  // 차단
+            }
+
+            override fun onReceivedSslError(view: WebView?, handler: android.webkit.SslErrorHandler?, error: android.net.http.SslError?) {
+                // SSL 에러 발생 시 기록
+                hasSslError = true
+                Log.d(TAG, "SSL 에러 발생: ${error?.primaryError}")
+                
+                // 인증서 정보 추출 시도
+                error?.certificate?.let { cert ->
+                    sslIssuerOrg = cert.issuedBy?.oName
+                    val validTill = cert.validNotAfterDate
+                    if (validTill != null) {
+                        val daysRemaining = ((validTill.time - System.currentTimeMillis()) / (1000 * 60 * 60 * 24)).toInt()
+                        sslValidDaysRemaining = daysRemaining
+                    }
+                    Log.d(TAG, "SSL 인증서 - 발급자: $sslIssuerOrg, 남은 유효일: $sslValidDaysRemaining")
+                }
+                
+                // 피싱 분석을 위해 페이지 로드는 허용 (가상환경이므로)
+                handler?.proceed()
             }
         }
 
@@ -607,6 +642,91 @@ class MainActivity : AppCompatActivity() {
         webView.evaluateJavascript(extractor.getFeatureExtractionScript(), null)
     }
 
+    /**
+     * HTTPS URL에서 SSL 인증서 정보를 백그라운드에서 가져옴
+     */
+    private fun fetchSslCertificateInfo(urlString: String) {
+        Thread {
+            try {
+                val url = java.net.URL(urlString)
+                val conn = url.openConnection() as? javax.net.ssl.HttpsURLConnection ?: return@Thread
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                conn.connect()
+                
+                val certs = conn.serverCertificates
+                if (certs.isNotEmpty()) {
+                    val cert = certs[0] as? java.security.cert.X509Certificate
+                    cert?.let {
+                        // 발급자 정보
+                        val issuerDN = it.issuerX500Principal.name
+                        sslIssuerOrg = extractOrgFromDN(issuerDN)
+                        
+                        // 유효기간 계산
+                        val notAfter = it.notAfter
+                        val daysRemaining = ((notAfter.time - System.currentTimeMillis()) / (1000 * 60 * 60 * 24)).toInt()
+                        sslValidDaysRemaining = daysRemaining
+                        
+                        Log.d(TAG, "SSL 인증서 정보 - 발급자: $sslIssuerOrg, 남은 유효일: $sslValidDaysRemaining")
+                    }
+                }
+                conn.disconnect()
+            } catch (e: Exception) {
+                Log.d(TAG, "SSL 인증서 정보 가져오기 실패: ${e.message}")
+            }
+        }.start()
+    }
+
+    /**
+     * X500 DN에서 Organization (O=) 추출
+     */
+    private fun extractOrgFromDN(dn: String): String? {
+        return try {
+            val regex = Regex("O=([^,]+)")
+            regex.find(dn)?.groupValues?.get(1)?.trim()
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * SSL 상태 계산 (UCI 피처용)
+     * -1: 신뢰할 수 없음 (HTTP, SSL 에러, 짧은 유효기간)
+     *  0: 애매함 (HTTPS지만 발급자 불명 또는 유효기간 짧음)
+     *  1: 신뢰 (HTTPS + 알려진 발급자 + 충분한 유효기간)
+     */
+    fun computeSslState(isHttps: Boolean): Int {
+        // SSL 에러 발생 시 무조건 -1
+        if (hasSslError) return -1
+        
+        // HTTP면 -1
+        if (!isHttps) return -1
+        
+        // 알려진 신뢰할 수 있는 인증서 발급자 목록
+        val knownIssuers = listOf(
+            "DigiCert", "Let's Encrypt", "Comodo", "GlobalSign", "Sectigo",
+            "GeoTrust", "Thawte", "VeriSign", "Symantec", "GoDaddy",
+            "Amazon", "Google Trust Services", "Microsoft", "Entrust",
+            "Baltimore", "Cloudflare", "ISRG", "Buypass", "Certum"
+        )
+        
+        val issuerKnown = sslIssuerOrg?.let { issuer ->
+            knownIssuers.any { issuer.contains(it, ignoreCase = true) }
+        } ?: false
+        
+        // HTTPS인데 발급자 정보 없거나 유효기간 짧으면 의심
+        if (!issuerKnown || sslValidDaysRemaining < 30) {
+            return 0
+        }
+        
+        // 유효기간이 180일 미만이면 약간 의심
+        if (sslValidDaysRemaining < 180) {
+            return 0
+        }
+        
+        return 1
+    }
+
     private fun analyzeAndDisplayPhishingResult(features: WebFeatures) {
         val merged = features.toMutableMap()
         val nullCount = merged.count { it.value == null }
@@ -627,6 +747,12 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Log.d(TAG, "Failed to merge dynamic redirect counter", e)
         }
+        
+        // SSL 상태를 Native에서 계산한 값으로 덮어쓰기
+        val isHttps = currentUrl?.startsWith("https://") == true
+        val nativeSslState = computeSslState(isHttps)
+        merged["SSLfinal_State"] = nativeSslState.toFloat()
+        Log.d(TAG, "SSL 상태 (Native): $nativeSslState (hasSslError=$hasSslError, issuer=$sslIssuerOrg, validDays=$sslValidDaysRemaining)")
 
         val analysisResult = phishingDetector.analyzePhishing(merged, currentUrl)
         isAnalyzingFeatures = false
@@ -752,7 +878,7 @@ class MainActivity : AppCompatActivity() {
         private const val NO_URL_WARNING_KEY = "__NO_URL__"
         private const val DEFAULT_CAMERA_HINT = "QR을 비추면 위협 URL이 여기에 나타납니다"
         // 디버그용으로 자동 분석할 URL (예: "https://phish.example.com"), 주석 해제 후 값 입력
-        private const val DEBUG_AUTO_LAUNCH_URL = "https://www.progarchives.com/album.asp?id=61737"
+        private const val DEBUG_AUTO_LAUNCH_URL = "www.naver.com"
     }
 
     private fun maybeLaunchDebugUrl() {
@@ -894,14 +1020,9 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     }
                     
                     // 8. SSLfinal_State: HTTPS 및 SSL 상태 (-1: 신뢰할 수 없음, 0: 애매, 1: 신뢰)
-                    // 간단 구현: HTTPS 사용 여부 + 인증서 체크 불가능하므로 기본적으로 HTTPS면 1
-                    if (protocol === 'https:') {
-                        features.SSLfinal_State = 1;
-                    } else if (protocol === 'http:') {
-                        features.SSLfinal_State = -1;
-                    } else {
-                        features.SSLfinal_State = 0;
-                    }
+                    // NOTE: 이 값은 Android Native에서 인증서 정보를 기반으로 덮어씁니다.
+                    // JavaScript에서는 인증서 상세 정보에 접근 불가하므로 임시값만 설정합니다.
+                    features.SSLfinal_State = (protocol === 'https:') ? 1 : -1;
                     
                     // 9. Favicon: 파비콘이 외부 도메인에서 로드되는지 (-1: 외부, 1: 내부 또는 없음)
                     var faviconLinks = document.querySelectorAll('link[rel*="icon"]');
