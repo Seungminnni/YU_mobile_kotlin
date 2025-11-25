@@ -708,7 +708,7 @@ class MainActivity : AppCompatActivity() {
         private const val NO_URL_WARNING_KEY = "__NO_URL__"
         private const val DEFAULT_CAMERA_HINT = "QR을 비추면 위협 URL이 여기에 나타납니다"
         // 디버그용으로 자동 분석할 URL (예: "https://phish.example.com"), 주석 해제 후 값 입력
-        private const val DEBUG_AUTO_LAUNCH_URL = "https://www.officialliker.co/"
+        private const val DEBUG_AUTO_LAUNCH_URL = "https://www.velocidrone.com/"
     }
 
     private fun maybeLaunchDebugUrl() {
@@ -779,9 +779,526 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
         return """
             javascript:(function() {
                 try {
-                    // 안전한 길이 계산 헬퍼: 빈 배열일 때 0 반환
-                    function safeMin(words) {
-                        if (!words || words.length === 0) return 0;
+                    function normalizeUrl(raw) {
+                        try {
+                            return new URL(raw, window.location.href);
+                        } catch (e) {
+                            return null;
+                        }
+                    }
+
+                    var url = window.location.href;
+                    var hostLower = window.location.hostname.toLowerCase();
+                    var pathLower = window.location.pathname.toLowerCase();
+                    var hostParts = hostLower.split('.');
+                    var subdomainPart = hostParts.length > 2 ? hostParts.slice(0, hostParts.length - 2).join('.') : '';
+                    var domainLabel = hostParts.length > 1 ? hostParts[hostParts.length - 2] : hostLower;
+                    var tld = hostParts.length > 0 ? hostParts[hostParts.length - 1] : '';
+                    
+                    // URL 전체에서 단어 추출 (Python 로직과 동일하게 프로토콜 제외 및 분리 문자 지정)
+                    // Python split: "-.|/?=@&%:_"
+                    var splitRegex = /[\-\.\/\?\=\@\&\%\:\_]/;
+                    var urlForWords = window.location.hostname + window.location.pathname + window.location.search;
+                    var urlWords = urlForWords.split(splitRegex).filter(function(w){ return w && w.length > 0; });
+                    var hostWords = window.location.hostname.split(splitRegex).filter(function(w){ return w && w.length > 0; });
+                    var pathWords = (window.location.pathname + window.location.search).split(splitRegex).filter(function(w){ return w && w.length > 0; });
+                    
+                    var features = {};
+
+                    // ===== URL 기반 피처 (url_features.py 기준) =====
+                    
+                    // length_url
+                    features.length_url = url.length;
+                    
+                    // length_hostname
+                    features.length_hostname = window.location.hostname.length;
+                    
+                    // ip: IP 주소 형태인지 확인 (IPv4)
+                    features.ip = /^(\d{1,3}\.){3}\d{1,3}$/.test(window.location.hostname) ? 1 : 0;
+                    
+                    // nb_dots
+                    features.nb_dots = (url.match(/\./g) || []).length;
+                    
+                    // nb_hyphens
+                    features.nb_hyphens = (url.match(/-/g) || []).length;
+                    
+                    // nb_at
+                    features.nb_at = (url.match(/@/g) || []).length;
+                    
+                    // nb_qm (물음표)
+                    features.nb_qm = (url.match(/\?/g) || []).length;
+                    
+                    // nb_and
+                    features.nb_and = (url.match(/&/g) || []).length;
+                    
+                    // nb_or
+                    features.nb_or = (url.match(/\|/g) || []).length;
+                    
+                    // nb_eq
+                    features.nb_eq = (url.match(/=/g) || []).length;
+                    
+                    // nb_underscore
+                    features.nb_underscore = (url.match(/_/g) || []).length;
+                    
+                    // nb_tilde
+                    features.nb_tilde = (url.match(/~/g) || []).length;
+                    
+                    // nb_percent
+                    features.nb_percent = (url.match(/%/g) || []).length;
+                    
+                    // nb_slash
+                    features.nb_slash = (url.match(/\//g) || []).length;
+                    
+                    // nb_star
+                    features.nb_star = (url.match(/\*/g) || []).length;
+                    
+                    // nb_colon
+                    features.nb_colon = (url.match(/:/g) || []).length;
+                    
+                    // nb_comma
+                    features.nb_comma = (url.match(/,/g) || []).length;
+                    
+                    // nb_semicolumn
+                    features.nb_semicolumn = (url.match(/;/g) || []).length;
+                    
+                    // nb_dollar
+                    features.nb_dollar = (url.match(/\$/g) || []).length;
+                    
+                    // nb_space
+                    features.nb_space = (url.match(/ /g) || []).length + (url.match(/%20/g) || []).length;
+                    
+                    // nb_www: words_raw 배열에서 'www'를 포함한 단어 개수
+                    var wwwCount = 0;
+                    for (var wi = 0; wi < urlWords.length; wi++) {
+                        if (urlWords[wi].toLowerCase().indexOf('www') !== -1) wwwCount++;
+                    }
+                    features.nb_www = wwwCount;
+                    
+                    // nb_com: words_raw 배열에서 'com'을 포함한 단어 개수
+                    var comCount = 0;
+                    for (var ci = 0; ci < urlWords.length; ci++) {
+                        if (urlWords[ci].toLowerCase().indexOf('com') !== -1) comCount++;
+                    }
+                    features.nb_com = comCount;
+                    
+                    // nb_dslash: Python 로직 - 마지막 '//' 위치가 6보다 크면 1, 아니면 0
+                    var slashMatches = [];
+                    var slashRegex = /\/\//g;
+                    var match;
+                    while ((match = slashRegex.exec(url)) !== null) {
+                        slashMatches.push(match.index);
+                    }
+                    if (slashMatches.length > 0 && slashMatches[slashMatches.length - 1] > 6) {
+                        features.nb_dslash = 1;
+                    } else {
+                        features.nb_dslash = 0;
+                    }
+                    
+                    // http_in_path
+                    features.http_in_path = pathLower.includes('http') ? 1 : 0;
+                    
+                    // https_token: HTTPS면 0(안전), HTTP면 1(위험)
+                    features.https_token = window.location.protocol === 'https:' ? 0 : 1;
+                    
+                    // ratio_digits_url
+                    features.ratio_digits_url = (url.match(/\d/g) || []).length / Math.max(url.length, 1);
+                    
+                    // ratio_digits_host
+                    features.ratio_digits_host = (window.location.hostname.match(/\d/g) || []).length / Math.max(window.location.hostname.length, 1);
+                    
+                    // punycode: Python 로직 - URL이 http://xn-- 또는 https://xn--로 시작하는지
+                    features.punycode = (url.startsWith('http://xn--') || url.startsWith('https://xn--')) ? 1 : 0;
+                    
+                    // port: Python 정규식으로 포트 체크
+                    features.port = /^[a-z][a-z0-9+\-.]*:\/\/([a-z0-9\-._~%!$&'()*+,;=]+@)?([a-z0-9\-._~%]+|\[[a-z0-9\-._~%!$&'()*+,;=:]+\]):([0-9]+)/.test(url) ? 1 : 0;
+                    
+                    // tld_in_path: Python 로직 - path에 tld 문자열이 포함되어 있는지
+                    features.tld_in_path = pathLower.indexOf(tld) !== -1 ? 1 : 0;
+                    
+                    // tld_in_subdomain: Python 로직 - subdomain에 tld 문자열이 포함되어 있는지
+                    features.tld_in_subdomain = subdomainPart.toLowerCase().indexOf(tld) !== -1 ? 1 : 0;
+                    
+                    // abnormal_subdomain: Python 정규식
+                    features.abnormal_subdomain = /(http[s]?:\/\/(w[w]?|\d))([w]?(\d|-))/.test(url) ? 1 : 0;
+                    
+                    // nb_subdomains: Python 로직 - 점이 1개면 1, 2개면 2, 그 외는 3
+                    var dotCount = (url.match(/\./g) || []).length;
+                    if (dotCount == 1) {
+                        features.nb_subdomains = 1;
+                    } else if (dotCount == 2) {
+                        features.nb_subdomains = 2;
+                    } else {
+                        features.nb_subdomains = 3;
+                    }
+                    
+                    // prefix_suffix: Python 정규식 - https?://[^\-]+-[^\-]+/ 패턴 체크
+                    features.prefix_suffix = /https?:\/\/[^\-]+-[^\-]+\//.test(url) ? 1 : 0;
+                    
+                    // random_domain: 모음이 적은 랜덤 도메인인지
+                    features.random_domain = (domainLabel && domainLabel.length >= 5 && (domainLabel.replace(/[aeiou]/gi,'').length / domainLabel.length) > 0.6) ? 1 : 0;
+                    
+                    // shortening_service
+                    var shortenerHosts = ['bit.ly','tinyurl.com','t.co','goo.gl','ow.ly','is.gd','s.id','rebrand.ly','buff.ly','cutt.ly','lnkd.in'];
+                    features.shortening_service = shortenerHosts.includes(hostLower) ? 1 : 0;
+                    
+                    // path_extension: Python 로직 - .txt로 끝나면 1, 아니면 0
+                    features.path_extension = window.location.pathname.endsWith('.txt') ? 1 : 0;
+                    
+                    // nb_redirection: Performance API로 리다이렉트 카운트 (JavaScript에서 가능한 범위)
+                    var redirectChainLength = 0;
+                    try {
+                        if (window.performance && window.performance.getEntriesByType) {
+                            var navEntries = window.performance.getEntriesByType('navigation');
+                            if (navEntries && navEntries.length > 0 && typeof navEntries[0].redirectCount === 'number') {
+                                redirectChainLength = navEntries[0].redirectCount;
+                            } else if (window.performance.navigation && typeof window.performance.navigation.redirectCount === 'number') {
+                                redirectChainLength = window.performance.navigation.redirectCount;
+                            }
+                        }
+                    } catch (redirectErr) {
+                        redirectChainLength = 0;
+                    }
+                    features.nb_redirection = redirectChainLength;
+                    
+                    // nb_external_redirection: 앱에서 동적으로 계산
+                    features.nb_external_redirection = 0;
+                    
+                    // length_words_raw
+                    features.length_words_raw = urlWords.length;
+                    
+                    // char_repeat: 2~5자 연속 반복 횟수의 합계 (Python 로직과 동일)
+                    function countCharRepeat(words) {
+                        var repeatCounts = {2: 0, 3: 0, 4: 0, 5: 0};
+                        for (var wi = 0; wi < words.length; wi++) {
+                            var word = words[wi];
+                            for (var len = 2; len <= 5; len++) {
+                                for (var i = 0; i <= word.length - len; i++) {
+                                    var substr = word.substr(i, len);
+                                    var allSame = true;
+                                    for (var c = 1; c < substr.length; c++) {
+                                        if (substr[c] !== substr[0]) { allSame = false; break; }
+                                    }
+                                    if (allSame) repeatCounts[len]++;
+                                }
+                            }
+                        }
+                        return repeatCounts[2] + repeatCounts[3] + repeatCounts[4] + repeatCounts[5];
+                    }
+                    features.char_repeat = countCharRepeat(urlWords);
+                    
+                    // shortest_words_raw
+                    var urlWordLengths = urlWords.map(function(w) { return w.length; });
+                    features.shortest_words_raw = urlWordLengths.length > 0 ? Math.min.apply(null, urlWordLengths) : 0;
+                    
+                    // shortest_word_host
+                    var hostWordLengths = hostWords.map(function(w) { return w.length; });
+                    features.shortest_word_host = hostWordLengths.length > 0 ? Math.min.apply(null, hostWordLengths) : 0;
+                    
+                    // shortest_word_path
+                    var pathWordLengths = pathWords.map(function(w) { return w.length; });
+                    features.shortest_word_path = pathWordLengths.length > 0 ? Math.min.apply(null, pathWordLengths) : 0;
+                    
+                    // longest_words_raw
+                    features.longest_words_raw = urlWordLengths.length > 0 ? Math.max.apply(null, urlWordLengths) : 0;
+                    
+                    // longest_word_host
+                    features.longest_word_host = hostWordLengths.length > 0 ? Math.max.apply(null, hostWordLengths) : 0;
+                    
+                    // longest_word_path
+                    features.longest_word_path = pathWordLengths.length > 0 ? Math.max.apply(null, pathWordLengths) : 0;
+                    
+                    // avg_words_raw
+                    function calcAvg(arr) {
+                        if (!arr || arr.length === 0) return 0;
+                        var sum = 0;
+                        for (var i = 0; i < arr.length; i++) sum += arr[i];
+                        return sum / arr.length;
+                    }
+                    features.avg_words_raw = calcAvg(urlWordLengths);
+                    
+                    // avg_word_host
+                    features.avg_word_host = calcAvg(hostWordLengths);
+                    
+                    // avg_word_path
+                    features.avg_word_path = calcAvg(pathWordLengths);
+                    
+                    // phish_hints: Python의 HINTS 리스트와 동일
+                    var phishKeywords = ['wp','login','includes','admin','content','site','images','js','alibaba','css','myaccount','dropbox','themes','plugins','signin','view'];
+                    var urlLower = url.toLowerCase();
+                    var phishHintCount = 0;
+                    for (var pk = 0; pk < phishKeywords.length; pk++) {
+                        if (urlLower.indexOf(phishKeywords[pk]) !== -1) phishHintCount++;
+                    }
+                    features.phish_hints = phishHintCount;
+                    
+                    // domain_in_brand: Python 로직 - domain이 brand 리스트에 정확히 있는지 (Exact Match)
+                    var brandKeywords = ['paypal','naver','apple','bank','google','microsoft','kakao','facebook','instagram','amazon','ebay','netflix','samsung'];
+                    features.domain_in_brand = brandKeywords.includes(domainLabel) ? 1 : 0;
+                    
+                    // brand_in_subdomain: Python 로직 - '.'+brand+'.'이 subdomain에 있는지
+                    features.brand_in_subdomain = 0;
+                    for (var b = 0; b < brandKeywords.length; b++) {
+                        if (subdomainPart.indexOf('.' + brandKeywords[b] + '.') !== -1) {
+                            features.brand_in_subdomain = 1;
+                            break;
+                        }
+                    }
+                    
+                    // brand_in_path: Python 로직 - '.'+brand+'.'이 path에 있는지
+                    features.brand_in_path = 0;
+                    for (var b = 0; b < brandKeywords.length; b++) {
+                        if (pathLower.indexOf('.' + brandKeywords[b] + '.') !== -1) {
+                            features.brand_in_path = 1;
+                            break;
+                        }
+                    }
+                    
+                    // suspecious_tld
+                    var suspiciousTlds = ['fit','tk','gp','ga','work','ml','date','wang','men','icu','online','click','xyz','top','zip','country','stream','download','xin','racing','jetzt','ren','mom','party','review','trade','accountants','science','ninja','faith','cricket','win','accountant','realtor','christmas','gdn','link','asia','club','la','ae','exposed','pe','rs','audio','website','bj','mx','media'];
+                    features.suspecious_tld = suspiciousTlds.includes(tld) ? 1 : 0;
+                    
+                    // statistical_report: 클라이언트에서는 구현 불가능하므로 0으로 설정
+                    features.statistical_report = 0;
+
+                    // ===== 콘텐츠 기반 피처 (content_features.py 기준) =====
+                    
+                    // nb_hyperlinks: 모든 hyperlink 요소의 합 (Href, Link, Media, Form, CSS, Favicon)
+                    // Python: len(Href['internals']) + len(Href['externals']) + ... (모든 카테고리)
+                    var allHrefElements = document.querySelectorAll('[href]');
+                    var allSrcElements = document.querySelectorAll('[src]');
+                    features.nb_hyperlinks = allHrefElements.length + allSrcElements.length;
+                    
+                    // Anchor 분석용
+                    var anchors = Array.prototype.slice.call(document.querySelectorAll('a[href]'));
+                    var totalAnchors = anchors.length;
+                    
+                    // ratio_intHyperlinks, ratio_extHyperlinks, ratio_nullHyperlinks
+                    var internalCount = 0;
+                    var externalCount = 0;
+                    var nullCount = 0;
+                    for (var a = 0; a < anchors.length; a++) {
+                        var href = anchors[a].getAttribute('href');
+                        if (!href || href.trim() === '' || href.startsWith('#') || href.toLowerCase().startsWith('javascript:')) {
+                            nullCount++;
+                            continue;
+                        }
+                        var n = normalizeUrl(href);
+                        if (!n || !n.hostname) {
+                            nullCount++;
+                            continue;
+                        }
+                        if (n.hostname === window.location.hostname) internalCount++; else externalCount++;
+                    }
+                    features.ratio_intHyperlinks = totalAnchors === 0 ? 0 : (internalCount / totalAnchors);
+                    features.ratio_extHyperlinks = totalAnchors === 0 ? 0 : (externalCount / totalAnchors);
+                    features.ratio_nullHyperlinks = totalAnchors === 0 ? 0 : (nullCount / totalAnchors);
+                    
+                    // nb_extCSS: 외부 도메인에서 로드하는 CSS 파일 수
+                    var cssLinks = document.querySelectorAll('link[rel="stylesheet"]');
+                    var extCSSCount = 0;
+                    for (var ci = 0; ci < cssLinks.length; ci++) {
+                        var cssHref = cssLinks[ci].getAttribute('href');
+                        if (cssHref) {
+                            var cssUrl = normalizeUrl(cssHref);
+                            if (cssUrl && cssUrl.hostname && cssUrl.hostname !== window.location.hostname) {
+                                extCSSCount++;
+                            }
+                        }
+                    }
+                    features.nb_extCSS = extCSSCount;
+                    
+                    // ratio_intRedirection, ratio_extRedirection: 앱에서 동적으로 계산
+                    features.ratio_intRedirection = 0;
+                    features.ratio_extRedirection = 0;
+                    
+                    // ratio_intErrors, ratio_extErrors: 앱에서 동적으로 계산
+                    features.ratio_intErrors = 0;
+                    features.ratio_extErrors = 0;
+                    
+                    // login_form: Python 로직 - 외부/null Form이 있거나 .php로 끝나는 Form action
+                    var forms = document.getElementsByTagName('form');
+                    var hasExternalOrNullForm = false;
+                    var hasPhpForm = false;
+                    
+                    for (var i = 0; i < forms.length; i++) {
+                        var action = (forms[i].getAttribute('action') || '').trim();
+                        
+                        // null 또는 외부 Form 체크
+                        if (!action || action === '' || action === '#' || action === 'about:blank' || action.startsWith('javascript:')) {
+                            hasExternalOrNullForm = true;
+                        } else if (action.indexOf('http') === 0) {
+                            var formUrl = normalizeUrl(action);
+                            if (formUrl && formUrl.hostname && formUrl.hostname !== window.location.hostname) {
+                                hasExternalOrNullForm = true;
+                            }
+                        }
+                        
+                        // .php로 끝나는지 체크
+                        if (/([a-zA-Z0-9_])+\.php/.test(action)) {
+                            hasPhpForm = true;
+                        }
+                    }
+                    
+                    features.login_form = (hasExternalOrNullForm || hasPhpForm) ? 1 : 0;
+                    
+                    // external_favicon: 외부 favicon 존재 여부
+                    var faviconLinks = document.querySelectorAll('link[rel*="icon"]');
+                    var hasExternalFavicon = false;
+                    for (var fi = 0; fi < faviconLinks.length; fi++) {
+                        var faviHref = faviconLinks[fi].getAttribute('href');
+                        if (faviHref && faviHref.indexOf('http') === 0) {
+                            var favUrl = normalizeUrl(faviHref);
+                            if (favUrl && favUrl.hostname && favUrl.hostname !== window.location.hostname) {
+                                hasExternalFavicon = true;
+                                break;
+                            }
+                        }
+                    }
+                    features.external_favicon = hasExternalFavicon ? 1 : 0;
+                    
+                    // links_in_tags: 내부 링크 비율 (0 ~ 100, Python과 동일)
+                    // Python: Link['internals'] / (Link['internals'] + Link['externals']) * 100
+                    var linkElements = document.querySelectorAll('link[href]');
+                    var internalLinks = 0;
+                    var externalLinks = 0;
+                    for (var li = 0; li < linkElements.length; li++) {
+                        var linkHref = linkElements[li].getAttribute('href');
+                        if (!linkHref) continue;
+                        var linkUrl = normalizeUrl(linkHref);
+                        if (!linkUrl || !linkUrl.hostname) continue;
+                        if (linkUrl.hostname === window.location.hostname) internalLinks++; else externalLinks++;
+                    }
+                    var totalLinks = internalLinks + externalLinks;
+                    features.links_in_tags = totalLinks === 0 ? 0 : ((internalLinks / totalLinks) * 100);
+                    
+                    // submit_email: Python 로직 - Form action에 mailto: 또는 mail() 포함
+                    var hasEmailSubmit = false;
+                    for (var i = 0; i < forms.length; i++) {
+                        var action = (forms[i].getAttribute('action') || '').toLowerCase();
+                        if (action.indexOf('mailto:') !== -1 || action.indexOf('mail()') !== -1) {
+                            hasEmailSubmit = true;
+                        } else {
+                            hasEmailSubmit = false;
+                        }
+                        break; // Python은 첫 번째 Form만 체크
+                    }
+                    features.submit_email = hasEmailSubmit ? 1 : 0;
+                    
+                    // ratio_intMedia, ratio_extMedia: 미디어 비율 (0 ~ 100, Python과 동일)
+                    var mediaEls = Array.prototype.slice.call(document.querySelectorAll('img, video, audio, source'));
+                    var totalMedia = mediaEls.length;
+                    var internalMedia = 0;
+                    var externalMedia = 0;
+                    for (var m = 0; m < mediaEls.length; m++) {
+                        var src = mediaEls[m].getAttribute('src') || mediaEls[m].getAttribute('data-src');
+                        if (!src) continue;
+                        var nm = normalizeUrl(src);
+                        if (!nm || !nm.hostname) continue;
+                        if (nm.hostname === window.location.hostname) internalMedia++; else externalMedia++;
+                    }
+                    features.ratio_intMedia = totalMedia === 0 ? 0 : ((internalMedia / totalMedia) * 100);
+                    features.ratio_extMedia = totalMedia === 0 ? 0 : ((externalMedia / totalMedia) * 100);
+                    
+                    // sfh: Server Form Handler (빈값/#/외부 도메인/about:blank일 때 unsafe)
+                    var unsafeForms = 0;
+                    for (var f = 0; f < forms.length; f++) {
+                        var action = forms[f].getAttribute('action') || '';
+                        var trimmed = action.trim().toLowerCase();
+                        if (!trimmed || trimmed === '#' || trimmed === 'about:blank' || trimmed.startsWith('javascript:')) {
+                            unsafeForms++; continue;
+                        }
+                        if (trimmed.indexOf('http') === 0) {
+                            var urlA = normalizeUrl(trimmed);
+                            if (urlA && urlA.hostname && urlA.hostname !== window.location.hostname) unsafeForms++;
+                        }
+                    }
+                    features.sfh = forms.length === 0 ? 0 : (unsafeForms / forms.length);
+                    
+                    // iframe: iframe 개수
+                    var iframes = document.getElementsByTagName('iframe');
+                    var invisibleIframeCount = 0;
+                    for (var ifi = 0; ifi < iframes.length; ifi++) {
+                        var iframe = iframes[ifi];
+                        var width = iframe.getAttribute('width') || iframe.width || '';
+                        var height = iframe.getAttribute('height') || iframe.height || '';
+                        var border = iframe.getAttribute('frameborder') || iframe.getAttribute('border') || '';
+                        var style = iframe.getAttribute('style') || '';
+                        if ((width === '0' || width === 0) && (height === '0' || height === 0)) {
+                            invisibleIframeCount++;
+                        }
+                        if (border === '0' && style.indexOf('border:none') !== -1 && (width === '0' || height === '0')) {
+                            invisibleIframeCount++;
+                        }
+                    }
+                    features.iframe = invisibleIframeCount > 0 ? 1 : 0;
+                    
+                    // popup_window: prompt가 있는지 (Python 로직)
+                    var hasPopup = false;
+                    var scripts = document.getElementsByTagName('script');
+                    for (var si = 0; si < scripts.length && !hasPopup; si++) {
+                        var scriptContent = scripts[si].textContent || '';
+                        if (scriptContent.indexOf('prompt(') !== -1) hasPopup = true;
+                    }
+                    features.popup_window = hasPopup ? 1 : 0;
+                    
+                    // safe_anchor: 안전하지 않은 앵커 비율 (0 ~ 100, Python과 동일)
+                    // Python의 Anchor['safe']는 외부링크, Anchor['unsafe']는 null/javascript 링크
+                    var safeAnchors = externalCount;
+                    var unsafeAnchors = nullCount;
+                    var totalForSafe = safeAnchors + unsafeAnchors;
+                    features.safe_anchor = totalForSafe === 0 ? 0 : ((unsafeAnchors / totalForSafe) * 100);
+                    
+                    // onmouseover: onmouseover 이벤트가 있는지
+                    var hasOnmouseover = (document.querySelectorAll('[onmouseover]').length > 0);
+                    if (!hasOnmouseover && document.body) {
+                        hasOnmouseover = document.body.innerHTML.toLowerCase().indexOf('onmouseover="window.status=') !== -1;
+                    }
+                    features.onmouseover = hasOnmouseover ? 1 : 0;
+                    
+                    // right_clic: 우클릭 방지가 있는지
+                    var hasRightClick = false;
+                    if (document.body && document.body.oncontextmenu) hasRightClick = true;
+                    if (document.querySelectorAll('[oncontextmenu]').length > 0) hasRightClick = true;
+                    if (document.body && document.body.innerHTML.match(/event\.button\s*==\s*2/)) hasRightClick = true;
+                    features.right_clic = hasRightClick ? 1 : 0;
+                    
+                    // empty_title: 타이틀이 비어있는지
+                    features.empty_title = (document.title.trim() === '') ? 1 : 0;
+                    
+                    // domain_in_title: 타이틀에 도메인이 있는지 (0=있음, 1=없음)
+                    var titleLower = document.title.toLowerCase();
+                    var mainDomain = hostParts.length >= 2 ? hostParts[hostParts.length - 2] : hostParts[0];
+                    features.domain_in_title = (titleLower.indexOf(mainDomain) !== -1) ? 0 : 1;
+                    
+                    // domain_with_copyright: 페이지에 © 기호와 도메인이 함께 있는지 (0=있음, 1=없음)
+                    var bodyTextForCopy = (document.body && document.body.innerText) ? document.body.innerText.toLowerCase() : '';
+                    var hasCopyright = (bodyTextForCopy.indexOf('©') !== -1 || bodyTextForCopy.indexOf('copyright') !== -1);
+                    features.domain_with_copyright = (hasCopyright && bodyTextForCopy.indexOf(mainDomain) !== -1) ? 0 : 1;
+
+                    // Android로 데이터 전송
+                    Android.receiveFeatures(JSON.stringify(features));
+                } catch (e) {
+                    console.error('피처 추출 중 오류:', e);
+                    Android.receiveFeatures(JSON.stringify({
+                        error: e.message
+                    }));
+                }
+            })();
+        """.trimIndent()
+    }
+}
+
+// 웹페이지 피처 데이터 클래스 (79개 피처를 Map으로 저장)
+typealias WebFeatures = Map<String, Float?>
+
+// 논문에서 제안하는 규칙 기반 피싱 탐지 시스템
+class PhishingDetector(private val context: Context) {
+
+    private val mlPredictor = TFLitePhishingPredictor(context)
+
+    // 피싱 탐지 규칙들 (논문 기반)
+    private val PHISHING_RULES = mapOf(
+        "DOM_NODE_THRESHOLD" to 500,      // DOM 노드 수 임계값
                         // If array contains numbers (lengths) treat elements as numbers
                         if (typeof words[0] === 'number') {
                             var minNum = Infinity;
@@ -1020,9 +1537,13 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.nb_space = (url.match(/ /g) || []).length;
                     features.nb_www = (url.match(/www/gi) || []).length;
                     features.nb_com = (url.match(/\.com/gi) || []).length;
-                    features.nb_dslash = (url.match(/\/\//g) || []).length;
+                    // nb_dslash: 프로토콜(http://, https://) 제외하고 // 카운트
+                    var urlWithoutProtocol = url.replace(/^https?:\/\//, '');
+                    features.nb_dslash = (urlWithoutProtocol.match(/\/\//g) || []).length;
                     features.http_in_path = pathLower.includes('http') ? 1 : 0;
-                    features.https_token = url.includes('https') ? 1 : 0;
+                    // https_token: URL에 "https" 토큰이 있는지 (호스트네임이 아닌 path 등에)
+                    // CSV에서는 https://인 경우 1, http://인 경우 0으로 보임
+                    features.https_token = window.location.protocol === 'https:' ? 1 : 0;
                     features.ratio_digits_url = (url.match(/\d/g) || []).length / Math.max(url.length, 1);
                     features.ratio_digits_host = (window.location.hostname.match(/\d/g) || []).length / Math.max(window.location.hostname.length, 1);
                     features.punycode = window.location.hostname.includes('xn--') ? 1 : 0;
@@ -1032,59 +1553,66 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.tld_in_subdomain = subTokens.some(function(tok){ return knownTlds.includes(tok); }) ? 1 : 0;
                     var subDigits = subdomainPart.replace(/[^0-9]/g,'').length;
                     features.abnormal_subdomain = (subdomainPart.length >= 30 || (subdomainPart.match(/\./g) || []).length >= 2 || (subDigits / Math.max(subdomainPart.length || 1, 1)) > 0.3) ? 1 : 0;
-                    features.nb_subdomains = Math.max(window.location.hostname.split('.').length - 2, 0);
+                    // nb_subdomains: 호스트의 점(.) 개수 = 서브도메인 레벨 수
+                    // 예: www.example.com => 2개 점 => nb_subdomains = 2가 아닌 3 (구분되는 파트 수 - 1)
+                    // CSV 기준: 점 개수가 서브도메인 수를 의미하는 것으로 보임
+                    features.nb_subdomains = (window.location.hostname.match(/\./g) || []).length;
                     features.prefix_suffix = window.location.hostname.includes('-') ? 1 : 0;
                     features.random_domain = (domainLabel && domainLabel.length >= 5 && (domainLabel.replace(/[aeiou]/gi,'').length / domainLabel.length) > 0.6) ? 1 : 0;
                     features.shortening_service = shortenerHosts.includes(hostLower) ? 1 : 0;
                     features.path_extension = /\.(php|html|htm|asp|aspx|jsp|exe|scr|zip|rar|jar|bat)$/i.test(window.location.pathname) ? 1 : 0;
                     features.nb_redirection = redirectChainLength;
-                    var externalRedirects = 0;
-                    try {
-                        if (window.performance && window.performance.getEntriesByType) {
-                            var resources = window.performance.getEntriesByType('resource') || [];
-                            for (var r = 0; r < resources.length; r++) {
-                                var entry = resources[r];
-                                var normalizedRes = normalizeUrl(entry.name);
-                                if (normalizedRes && normalizedRes.hostname && normalizedRes.hostname !== window.location.hostname) {
-                                    externalRedirects++;
-                                }
-                            }
-                        }
-                    } catch (perfErr) {}
-                    features.nb_external_redirection = externalRedirects;
+                    // nb_external_redirection: 페이지 리소스 중 외부 도메인 수 (과거 방식 유지하되 실제로는 측정 어려움)
+                    features.nb_external_redirection = 0;
 
-                    // 페이지 콘텐츠 기반  !!삼항연산자 혹은 조건문으로 디버깅을 해야함 -> 수정 하긴 했는데 검증
-                    var pathWords = window.location.pathname.split(/[^a-zA-Z0-9]/).filter(function(w){ return w; });
-                    var hostWords = window.location.hostname.split(/[^a-zA-Z0-9]/).filter(function(w){ return w; });
-                    features.length_words_raw = pathTokens.length;
-                    var repeatMatches = url.match(/(.)\1{2,}/g);
-                    features.char_repeat = repeatMatches ? repeatMatches.length : 0;
-                    features.shortest_words_raw = safeMin(pathTokens);
-                    features.shortest_word_host = safeMin(hostWords);
-                    features.shortest_word_path = safeMin(pathWords);
-                    features.longest_words_raw = safeMax(pathTokens);
-                    features.longest_word_host = safeMax(hostWords);
-                    features.longest_word_path = safeMax(pathWords);
-                    features.avg_words_raw = safeAvg(pathTokens);
-                    features.avg_word_host = safeAvg(hostWords);
-                    features.avg_word_path = safeAvg(pathWords);
-                    // safe helpers already set above; keep these as fallback too
-                    features.longest_words_raw = safeMax(url.split(/[^a-zA-Z0-9]/).filter(function(w){return w;}).map(function(w){return w.length;}));
-                    features.longest_word_host = safeMax(window.location.hostname.split(/[^a-zA-Z0-9]/).filter(function(w){return w;}).map(function(w){return w.length;}));
-                    features.longest_word_path = safeMax(window.location.pathname.split(/[^a-zA-Z0-9]/).filter(function(w){return w;}).map(function(w){return w.length;}));
-                    features.avg_words_raw = safeAvg(url.split(/[^a-zA-Z0-9]/).filter(function(w){return w;}));
-                    features.avg_word_host = safeAvg(window.location.hostname.split(/[^a-zA-Z0-9]/).filter(function(w){return w;}));
-                    features.avg_word_path = safeAvg(window.location.pathname.split(/[^a-zA-Z0-9]/).filter(function(w){return w;}));
-                    // 문서 전체에서 피싱 의심 키워드 수 계산
-                    var bodyText = (document.body && document.body.innerText) ? document.body.innerText.toLowerCase() : '';
-                    var hints = ['login','secure','verify','bank','signin','authenticate','account','인증','로그인','보안'];
-                    var hintCount = 0;
-                    for (var h = 0; h < hints.length; h++) {
-                        var re = new RegExp('\\b' + hints[h] + '\\b','gi');
-                        var matches = bodyText.match(re);
-                        hintCount += matches ? matches.length : 0;
+                    // 페이지 콘텐츠 기반 - URL 전체를 단어로 분리하여 계산 (CSV 방식)
+                    // URL에서 알파벳/숫자가 아닌 문자로 분리한 단어들
+                    var urlWords = url.split(/[^a-zA-Z0-9]/).filter(function(w){ return w && w.length > 0; });
+                    var hostWords = window.location.hostname.split(/[^a-zA-Z0-9]/).filter(function(w){ return w && w.length > 0; });
+                    var pathWords = window.location.pathname.split(/[^a-zA-Z0-9]/).filter(function(w){ return w && w.length > 0; });
+                    
+                    // length_words_raw: URL 전체에서 추출한 단어 개수
+                    features.length_words_raw = urlWords.length;
+                    
+                    // char_repeat: URL에서 같은 문자가 3번 이상 연속으로 반복되는 패턴 중 가장 긴 것의 길이
+                    var repeatMatches = url.match(/(.)\1+/g) || [];
+                    var maxRepeat = 0;
+                    for (var ri = 0; ri < repeatMatches.length; ri++) {
+                        if (repeatMatches[ri].length > maxRepeat) maxRepeat = repeatMatches[ri].length;
                     }
-                    features.phish_hints = hintCount;
+                    features.char_repeat = maxRepeat;
+                    
+                    // shortest/longest/avg words: 단어 길이 계산
+                    var urlWordLengths = urlWords.map(function(w) { return w.length; });
+                    var hostWordLengths = hostWords.map(function(w) { return w.length; });
+                    var pathWordLengths = pathWords.map(function(w) { return w.length; });
+                    
+                    features.shortest_words_raw = urlWordLengths.length > 0 ? Math.min.apply(null, urlWordLengths) : 0;
+                    features.shortest_word_host = hostWordLengths.length > 0 ? Math.min.apply(null, hostWordLengths) : 0;
+                    features.shortest_word_path = pathWordLengths.length > 0 ? Math.min.apply(null, pathWordLengths) : 0;
+                    features.longest_words_raw = urlWordLengths.length > 0 ? Math.max.apply(null, urlWordLengths) : 0;
+                    features.longest_word_host = hostWordLengths.length > 0 ? Math.max.apply(null, hostWordLengths) : 0;
+                    features.longest_word_path = pathWordLengths.length > 0 ? Math.max.apply(null, pathWordLengths) : 0;
+                    
+                    // avg: 단어 길이 평균
+                    function calcAvg(arr) {
+                        if (!arr || arr.length === 0) return 0;
+                        var sum = 0;
+                        for (var i = 0; i < arr.length; i++) sum += arr[i];
+                        return sum / arr.length;
+                    }
+                    features.avg_words_raw = calcAvg(urlWordLengths);
+                    features.avg_word_host = calcAvg(hostWordLengths);
+                    features.avg_word_path = calcAvg(pathWordLengths);
+                    
+                    // phish_hints: URL에서 피싱 관련 키워드 수 (문서 본문이 아닌 URL에서만)
+                    var phishKeywords = ['login','signin','verify','account','update','secure','banking','confirm','password','credential','authenticate','wallet','suspend'];
+                    var urlLower = url.toLowerCase();
+                    var phishHintCount = 0;
+                    for (var pk = 0; pk < phishKeywords.length; pk++) {
+                        if (urlLower.indexOf(phishKeywords[pk]) !== -1) phishHintCount++;
+                    }
+                    features.phish_hints = phishHintCount;
                     // 브랜드 관련: 단순 포함 검사 (앱에서 브랜드 리스트로 관리 권장)
                     var brandKeywords = ['paypal','naver','apple','bank','google','microsoft','kakao','facebook','instagram'];
                     function containsBrand(str) {
@@ -1099,10 +1627,11 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.brand_in_subdomain = containsBrand(subdomainPart) ? 1 : 0;
                     features.brand_in_path = containsBrand(pathLower) ? 1 : 0;
                     features.suspecious_tld = ['xyz', 'top', 'icu'].includes(window.location.hostname.split('.').pop()) ? 1 : 0;
-                    features.nb_hyperlinks = document.getElementsByTagName('a').length;
-                    // 링크 비율 계산 (내부/외부/무효)
+                    // nb_hyperlinks: href 속성이 있는 a 태그 수
                     var anchors = Array.prototype.slice.call(document.querySelectorAll('a[href]'));
                     var totalAnchors = anchors.length;
+                    features.nb_hyperlinks = totalAnchors;
+                    // 링크 비율 계산 (내부/외부/무효)
                     var internalCount = 0;
                     var externalCount = 0;
                     var nullCount = 0;
@@ -1122,27 +1651,39 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.ratio_intHyperlinks = totalAnchors === 0 ? 0 : (internalCount / totalAnchors);
                     features.ratio_extHyperlinks = totalAnchors === 0 ? 0 : (externalCount / totalAnchors);
                     features.ratio_nullHyperlinks = totalAnchors === 0 ? 0 : (nullCount / totalAnchors);
-                    features.nb_extCSS = document.querySelectorAll('link[rel="stylesheet"]').length;
-                    features.ratio_intRedirection = null; // 구현 어려움
-                    features.ratio_extRedirection = null; // 구현 어려움
-                    features.ratio_intErrors = null; // 구현 어려움
-                    features.ratio_extErrors = null; // 구현 어려움
+                    // nb_extCSS: 외부 도메인에서 로드하는 CSS 파일 수
+                    var cssLinks = document.querySelectorAll('link[rel="stylesheet"]');
+                    var extCSSCount = 0;
+                    for (var ci = 0; ci < cssLinks.length; ci++) {
+                        var cssHref = cssLinks[ci].getAttribute('href');
+                        if (cssHref) {
+                            var cssUrl = normalizeUrl(cssHref);
+                            if (cssUrl && cssUrl.hostname && cssUrl.hostname !== window.location.hostname) {
+                                extCSSCount++;
+                            }
+                        }
+                    }
+                    features.nb_extCSS = extCSSCount;
+                    // ratio_intRedirection ~ ratio_extErrors: 구현 어려움, 0으로 설정
+                    features.ratio_intRedirection = 0;
+                    features.ratio_extRedirection = 0;
+                    features.ratio_intErrors = 0;
+                    features.ratio_extErrors = 0;
                     features.login_form = hasLoginForm ? 1 : 0;
                     features.external_favicon = document.querySelector('link[rel="icon"][href^="http"]') ? 1 : 0;
-                    // links_in_tags: ratio of anchors that live inside common semantic tags
-                    // (nav, header, footer, article, section, aside, p, li)
+                    // links_in_tags: 링크가 시맨틱 태그 안에 있는 비율 (0-100 퍼센트)
                     try {
-                        var containerTags = ['nav','header','footer','article','section','aside','p','li']
-                        var anchorsAllWithHref = Array.prototype.slice.call(document.querySelectorAll('a[href]'))
-                        var anchoredInTagsCount = 0
+                        var containerTags = ['nav','header','footer','article','section','aside','p','li'];
+                        var anchorsAllWithHref = Array.prototype.slice.call(document.querySelectorAll('a[href]'));
+                        var anchoredInTagsCount = 0;
                         for (var i = 0; i < anchorsAllWithHref.length; i++) {
-                            var el = anchorsAllWithHref[i]
-                            var ancestor = el.closest(containerTags.join(','))
-                            if (ancestor) anchoredInTagsCount++
+                            var el = anchorsAllWithHref[i];
+                            var ancestor = el.closest(containerTags.join(','));
+                            if (ancestor) anchoredInTagsCount++;
                         }
-                        features.links_in_tags = anchorsAllWithHref.length === 0 ? 0 : (anchoredInTagsCount / anchorsAllWithHref.length)
+                        features.links_in_tags = anchorsAllWithHref.length === 0 ? 0 : ((anchoredInTagsCount / anchorsAllWithHref.length) * 100);
                     } catch (e) {
-                        features.links_in_tags = 0
+                        features.links_in_tags = 0;
                     }
                     // Improve submit_email detection: treat as email if there is an input type='email'
                     var hasEmailSubmit = false;
@@ -1156,7 +1697,7 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                         if (hasEmailSubmit) break;
                     }
                     features.submit_email = hasEmailSubmit ? 1 : 0;
-                    // 미디어 src 비율 (img/video/audio/source)
+                    // 미디어 src 비율 (img/video/audio/source) - 0-100 퍼센트
                     var mediaEls = Array.prototype.slice.call(document.querySelectorAll('img, video, audio, source'));
                     var totalMedia = mediaEls.length;
                     var internalMedia = 0;
@@ -1168,8 +1709,8 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                         if (!nm || !nm.hostname) continue;
                         if (nm.hostname === window.location.hostname) internalMedia++; else externalMedia++;
                     }
-                    features.ratio_intMedia = totalMedia === 0 ? 0 : (internalMedia / totalMedia);
-                    features.ratio_extMedia = totalMedia === 0 ? 0 : (externalMedia / totalMedia);
+                    features.ratio_intMedia = totalMedia === 0 ? 0 : ((internalMedia / totalMedia) * 100);
+                    features.ratio_extMedia = totalMedia === 0 ? 0 : ((externalMedia / totalMedia) * 100);
                     // sfh: form action 빈값/#/외부 도메인일 때 unsafe, 비율로 반환
                     var unsafeForms = 0;
                     for (var f = 0; f < forms.length; f++) {
@@ -1185,23 +1726,36 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     }
                     features.sfh = forms.length === 0 ? 0 : (unsafeForms / forms.length);
                     features.iframe = iframeCount;
-                    // popup 및 target=_blank 수집
-                    var popCount = 0;
+                    // popup 및 target=_blank 수집 - 1이면 있음, 0이면 없음
+                    var hasPopup = false;
                     var anchorsAll = document.getElementsByTagName('a');
-                    for (var x = 0; x < anchorsAll.length; x++) {
+                    for (var x = 0; x < anchorsAll.length && !hasPopup; x++) {
                         var el = anchorsAll[x];
-                        var tgt = el.getAttribute('target');
                         var onclick = el.getAttribute('onclick') || '';
-                        if (tgt === '_blank') popCount++;
-                        if (onclick && onclick.indexOf('window.open') !== -1) popCount++;
+                        if (onclick && onclick.indexOf('window.open') !== -1) hasPopup = true;
                     }
-                    features.popup_window = popCount;
-                    features.safe_anchor = totalAnchors === 0 ? 0 : (1 - (nullCount / totalAnchors));
+                    // 스크립트에서 window.open 검사
+                    if (!hasPopup) {
+                        for (var si = 0; si < scripts.length && !hasPopup; si++) {
+                            var scriptContent = scripts[si].textContent || '';
+                            if (scriptContent.indexOf('window.open') !== -1) hasPopup = true;
+                        }
+                    }
+                    features.popup_window = hasPopup ? 1 : 0;
+                    // safe_anchor: 안전한 앵커 비율 (0-100 퍼센트)
+                    // null이 아닌 유효한 링크의 비율
+                    features.safe_anchor = totalAnchors === 0 ? 0 : ((1 - (nullCount / totalAnchors)) * 100);
                     features.onmouseover = document.querySelectorAll('[onmouseover]').length > 0 ? 1 : 0;
                     features.right_clic = (document.body && document.body.oncontextmenu) ? 1 : (document.querySelectorAll('[oncontextmenu]').length > 0 ? 1 : 0);
                     features.empty_title = document.title.trim() === '' ? 1 : 0;
-                    features.domain_in_title = document.title.includes(window.location.hostname) ? 1 : 0;
-                    features.domain_with_copyright = document.body.innerText.includes('©') && document.body.innerText.includes(window.location.hostname) ? 1 : 0;
+                    // domain_in_title: 타이틀에 도메인 이름(또는 주요 부분)이 포함되어 있는지
+                    var titleLower = document.title.toLowerCase();
+                    var domainParts = window.location.hostname.toLowerCase().split('.');
+                    var mainDomain = domainParts.length >= 2 ? domainParts[domainParts.length - 2] : domainParts[0];
+                    features.domain_in_title = (titleLower.indexOf(mainDomain) !== -1) ? 1 : 0;
+                    // domain_with_copyright: 페이지에 © 기호와 도메인이 함께 있는지
+                    var bodyTextForCopy = (document.body && document.body.innerText) ? document.body.innerText.toLowerCase() : '';
+                    features.domain_with_copyright = (bodyTextForCopy.indexOf('©') !== -1 && bodyTextForCopy.indexOf(mainDomain) !== -1) ? 1 : 0;
                     // External API dependant features (left as null or commented)
                     // features.whois_registered_domain = null; // requires WHOIS lookup
                     // features.domain_registration_length = null; // requires WHOIS
@@ -1536,6 +2090,165 @@ enum class AnalysisMode {
 }
 
 // 피싱 분석 결과 데이터 클래스
+data class PhishingAnalysisResult(
+    val isPhishing: Boolean,
+    val confidenceScore: Double,
+    val riskFactors: List<String>,
+    val features: WebFeatures?,
+    val inspectedUrl: String?,
+    val analysisMode: AnalysisMode
+)
+
+    // 피싱 탐지 규칙들 (논문 기반)
+    private val PHISHING_RULES = mapOf(
+        "DOM_NODE_THRESHOLD" to 500,
+        "IFRAME_THRESHOLD" to 3,
+        "EXTERNAL_FORM_THRESHOLD" to 2,
+        "BASE64_SCRIPT_THRESHOLD" to 1,
+        "EVENT_LISTENER_THRESHOLD" to 50,
+        "SUSPICIOUS_SCRIPT_THRESHOLD" to 2,
+        "REDIRECT_CHAIN_THRESHOLD" to 5,
+        "URL_LENGTH_THRESHOLD" to 100,
+        "SPECIAL_CHAR_THRESHOLD" to 20
+    )
+
+    private val phishingThreshold = 0.6
+    private val suspiciousUrlKeywords = listOf(
+        "login", "verify", "account", "secure", "security", "update",
+        "bank", "wallet", "airdrop", "bonus", "gift", "event", "signin",
+        "confirm", "billing", "support", "unlock", "reset"
+    )
+    private val highRiskTopLevelDomains = setOf(
+        "xyz", "top", "icu", "zip", "click", "gq", "cf", "ml", "tk",
+        "work", "monster", "support", "fit", "cn", "ru", "su"
+    )
+
+    fun isPhishing(features: WebFeatures, url: String? = null, threshold: Double = phishingThreshold): Boolean {
+        val result = analyzePhishing(features, url)
+        return result.confidenceScore >= threshold
+    }
+
+    fun analyzePhishing(features: WebFeatures, url: String? = null): PhishingAnalysisResult {
+        val mlPrediction = mlPredictor.predictWithML(features)
+        val riskFactors = mutableListOf<String>()
+        val urlHeuristics = url?.let { evaluateUrlHeuristics(it) }
+
+        val confidenceScore = if (mlPrediction >= 0.0f) {
+            mlPrediction.toDouble().coerceIn(0.0, 1.0)
+        } else {
+            0.5
+        }
+
+        val isPhishing = confidenceScore >= phishingThreshold
+
+        val nullKeys = features.filter { it.value == null }.map { it.key }
+        if (nullKeys.isNotEmpty()) {
+            Log.d("WebFeatureExtractor", "NULL(미구현) 피처 목록: ${nullKeys.joinToString(", ")}")
+        }
+
+        if (mlPrediction >= 0.0f) {
+            riskFactors.add("ML 예측 점수: ${(confidenceScore * 100).toInt()}%")
+            if (isPhishing) {
+                riskFactors.add("ML 모델이 피싱으로 판정")
+            } else {
+                riskFactors.add("ML 모델이 안전으로 판정")
+            }
+        } else {
+            riskFactors.add("ML 모델 로드 실패 - 기본 판정 사용")
+        }
+
+        if (urlHeuristics != null) {
+            riskFactors.addAll(urlHeuristics.riskFactors)
+        }
+
+        return PhishingAnalysisResult(
+            isPhishing = isPhishing,
+            confidenceScore = confidenceScore,
+            riskFactors = riskFactors.distinct(),
+            features = features,
+            inspectedUrl = url,
+            analysisMode = AnalysisMode.FULL
+        )
+    }
+
+    private fun evaluateUrlHeuristics(url: String): UrlHeuristicResult {
+        val normalizedUrl = url.trim()
+        val lowerUrl = normalizedUrl.lowercase(Locale.ROOT)
+        val uri = runCatching { URI(normalizedUrl) }.getOrNull()
+
+        val rawHost = uri?.host ?: run {
+            val stripped = normalizedUrl.substringAfter("://", normalizedUrl)
+            stripped.substringBefore('/').substringBefore('?')
+        }
+        val host = rawHost.lowercase(Locale.ROOT)
+        val hostWithoutPort = host.substringBefore(':')
+        val scheme = uri?.scheme ?: normalizedUrl.substringBefore("://", "")
+        val path = uri?.path ?: ""
+        val pathDepth = path.split('/').filter { it.isNotBlank() }.size
+        val encodedCharCount = normalizedUrl.count { it == '%' }
+        val specialCharCount = normalizedUrl.count { !it.isLetterOrDigit() }
+        val urlLength = normalizedUrl.length
+        val subdomainCount = countSubdomains(hostWithoutPort)
+        val hasIpAddress = hostWithoutPort.matches(Regex("^(\\d{1,3}\\.){3}\\d{1,3}\$")) ||
+            hostWithoutPort.matches(Regex("^[0-9a-fA-F:]+$"))
+        val matchedKeyword = suspiciousUrlKeywords.firstOrNull { lowerUrl.contains(it) }
+        val hasHighRiskTld = highRiskTopLevelDomains.any { hostWithoutPort.endsWith(".$it") }
+        val hasDoubleSlash = normalizedUrl.substringAfter("://", normalizedUrl).contains("//")
+
+        var score = 0.0
+        var totalWeight = 0.0
+        val riskFactors = mutableListOf<String>()
+
+        fun apply(weight: Double, condition: Boolean, message: () -> String) {
+            totalWeight += weight
+            if (condition) {
+                score += weight
+                riskFactors.add(message())
+            }
+        }
+
+        apply(0.18, urlLength > PHISHING_RULES["URL_LENGTH_THRESHOLD"]!!) {
+            "URL이 너무 김 ($urlLength)"
+        }
+        apply(0.18, specialCharCount > PHISHING_RULES["SPECIAL_CHAR_THRESHOLD"]!!) {
+            "특수문자가 많음 ($specialCharCount)"
+        }
+        apply(0.2, hasIpAddress) { "도메인 대신 IP 주소 사용" }
+        apply(0.1, normalizedUrl.contains("@")) { "\'@\' 문자를 포함한 URL" }
+        apply(0.1, scheme.equals("http", ignoreCase = true)) { "HTTPS가 아닌 HTTP 연결" }
+        apply(0.12, subdomainCount >= 3) { "과도한 서브도메인 사용 ($subdomainCount)" }
+        apply(0.15, matchedKeyword != null) { "피싱 의심 키워드 포함 ('$matchedKeyword')" }
+        apply(0.15, hostWithoutPort.contains("xn--")) { "Punycode 도메인 사용" }
+        apply(0.12, hasHighRiskTld) { "위험 TLD 사용 (.${hostWithoutPort.substringAfterLast('.')})" }
+        apply(0.1, pathDepth >= 4) { "URL 경로 깊이가 큼 ($pathDepth 단계)" }
+        apply(0.1, encodedCharCount > 3) { "인코딩 문자(%)가 과다 ($encodedCharCount)" }
+        apply(0.08, hasDoubleSlash) { "이중 '//' 경로 패턴 발견" }
+
+        val normalizedScore = if (totalWeight > 0) score / totalWeight else 0.0
+        return UrlHeuristicResult(
+            score = normalizedScore.coerceIn(0.0, 1.0),
+            riskFactors = riskFactors
+        )
+    }
+
+    private fun countSubdomains(host: String): Int {
+        if (host.isBlank()) return 0
+        val labels = host.split('.').filter { it.isNotBlank() }
+        return if (labels.size > 2) labels.size - 2 else 0
+    }
+
+    private data class UrlHeuristicResult(
+        val score: Double,
+        val riskFactors: MutableList<String>
+    )
+}
+
+enum class AnalysisMode {
+    FULL,
+    DOM_ONLY,
+    URL_ONLY
+}
+
 data class PhishingAnalysisResult(
     val isPhishing: Boolean,
     val confidenceScore: Double,
