@@ -609,6 +609,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun analyzeAndDisplayPhishingResult(features: WebFeatures) {
         val merged = features.toMutableMap()
+        val nullCount = merged.count { it.value == null }
+        if (nullCount > 0) {
+            val message = "❌ 피처 추출 실패 (${nullCount}개 null) - 다시 시도해주세요"
+            Log.w(TAG, message)
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            resultTextView.text = message
+            isAnalyzingFeatures = false
+            return
+        }
         Log.d(TAG, "dynamic redirects observed=$dynamicTotalRedirects")
         try {
             val dynamicRedirectValue = if (dynamicTotalRedirects > 1) -1f else 0f
@@ -1097,30 +1106,30 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     Android.receiveFeatures(JSON.stringify(payload));
                 } catch (e) {
                     console.error('피처 추출 중 오류:', e);
-                    // 오류 시 기본값 전송 (모두 0으로 설정)
+                    // 오류 시 null 값 전송하여 Kotlin에서 실패로 처리하도록 함
                     Android.receiveFeatures(JSON.stringify({
                         error: e.message,
-                        having_IP_Address: 0,
-                        URL_Length: 0,
-                        Shortining_Service: 0,
-                        having_At_Symbol: 0,
-                        double_slash_redirecting: 0,
-                        Prefix_Suffix: 0,
-                        having_Sub_Domain: 0,
-                        SSLfinal_State: 0,
-                        Favicon: 0,
-                        port: 0,
-                        HTTPS_token: 0,
-                        Request_URL: 0,
-                        URL_of_Anchor: 0,
-                        Links_in_tags: 0,
-                        SFH: 0,
-                        Submitting_to_email: 0,
-                        Redirect: 0,
-                        on_mouseover: 0,
-                        RightClick: 0,
-                        popUpWidnow: 0,
-                        Iframe: 0
+                        having_IP_Address: null,
+                        URL_Length: null,
+                        Shortining_Service: null,
+                        having_At_Symbol: null,
+                        double_slash_redirecting: null,
+                        Prefix_Suffix: null,
+                        having_Sub_Domain: null,
+                        SSLfinal_State: null,
+                        Favicon: null,
+                        port: null,
+                        HTTPS_token: null,
+                        Request_URL: null,
+                        URL_of_Anchor: null,
+                        Links_in_tags: null,
+                        SFH: null,
+                        Submitting_to_email: null,
+                        Redirect: null,
+                        on_mouseover: null,
+                        RightClick: null,
+                        popUpWidnow: null,
+                        Iframe: null
                     }));
                 }
             })();
