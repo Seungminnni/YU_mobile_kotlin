@@ -99,6 +99,11 @@ class TFLitePhishingPredictor(private val context: Context) {
         }
 
         return try {
+            val expectedSize = inputShape.lastOrNull()
+            if (expectedSize != null && expectedSize != featureColumns.size) {
+                Log.w(TAG, "모델 입력 피처 수 불일치: 모델 ${expectedSize} vs feature_info ${featureColumns.size} (ML 예측 건너뜀)")
+                return -1.0f
+            }
             // 로깅: JSON에서 누락된 키들
             val missingKeys = featureColumns.filter { !features.containsKey(it) || features[it] == null }
             if (missingKeys.isNotEmpty()) {
