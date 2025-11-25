@@ -8,6 +8,7 @@ import org.tensorflow.lite.support.tensorbuffer.TensorBuffer
 import org.tensorflow.lite.DataType
 import java.io.FileInputStream
 import java.nio.MappedByteBuffer
+import kotlin.math.exp
 import java.nio.channels.FileChannel
 
 class TFLitePhishingPredictor(private val context: Context) {
@@ -105,12 +106,29 @@ class TFLitePhishingPredictor(private val context: Context) {
                 Log.d(TAG, "Missing features (null/absent): ${missingKeys.joinToString(", ")}")
             }
             val inputArray = webFeaturesToFloatArray(features)
-            val outputBuffer = TensorBuffer.createFixedSize(intArrayOf(1, 1), DataType.FLOAT32)
+
+            // determine output tensor shape dynamically so we can support newer models
+            val outputTensor = interpreter?.getOutputTensor(0)
+            val outShape = outputTensor?.shape() ?: intArrayOf(1, 1)
+            Log.d(TAG, "출력 텐서 shape: ${outShape.joinToString(", ")}")
+
+            val outputBuffer = TensorBuffer.createFixedSize(outShape, DataType.FLOAT32)
 
             interpreter?.run(arrayOf(inputArray), outputBuffer.buffer)
-            // 이거 잘 봐야 함
 
-            val result = outputBuffer.floatArray[0]
+            val resultArray = outputBuffer.floatArray
+            if (resultArray.isEmpty()) {
+                Log.w(TAG, "ML 모델 출력이 비어있습니다")
+                return -1.0f
+            }
+
+            val result = if (resultArray.size == 1) {
+                resultArray[0]
+            } else {
+                // fallback reduction for vector outputs (e.g. new model returns 128 bytes -> 32 floats)
+                val mean = resultArray.average().toFloat()
+                (1.0f / (1.0f + exp(-mean)))
+            }
             Log.d(TAG, "ML 예측 결과: $result")
             result
 
