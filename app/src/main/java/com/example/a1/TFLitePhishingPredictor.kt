@@ -19,7 +19,7 @@ class TFLitePhishingPredictor(private val context: Context) {
 
     companion object {
         private const val TAG = "TFLitePhishingPredictor"
-        private const val MODEL_FILE = "phishing_model.tflite"
+        private const val MODEL_FILE = "phishing_classifier.tflite"  // 임베딩 모델 사용
         private const val FEATURE_INFO_FILE = "feature_info.json"
     }
 
@@ -90,7 +90,8 @@ class TFLitePhishingPredictor(private val context: Context) {
     }
 
     /**
-     * WebFeatures를 float array로 변환하여 ML 예측 수행
+     * WebFeatures를 사용하여 피싱 확률 예측
+     * 반환값: 피싱 확률 (0.0 = 정상, 1.0 = 피싱)
      */
     fun predictWithML(features: WebFeatures): Float {
         if (interpreter == null || featureColumns.isEmpty()) {
@@ -104,20 +105,26 @@ class TFLitePhishingPredictor(private val context: Context) {
                 Log.w(TAG, "모델 입력 피처 수 불일치: 모델 ${expectedSize} vs feature_info ${featureColumns.size} (ML 예측 건너뜀)")
                 return -1.0f
             }
-            // 로깅: JSON에서 누락된 키들
-            val missingKeys = featureColumns.filter { !features.containsKey(it) || features[it] == null }
-            if (missingKeys.isNotEmpty()) {
-                Log.d(TAG, "Missing features (null/absent): ${missingKeys.joinToString(", ")}")
-            }
+
+            // 1. 피처를 float array로 변환 (-1, 0, 1 값들)
             val inputArray = webFeaturesToFloatArray(features)
+
+            // 2. 분류 모델 추론 (1차원 출력: 0.0~1.0)
+            // 모델 출력: 0.0 = 피싱, 1.0 = 정상
             val outputBuffer = TensorBuffer.createFixedSize(intArrayOf(1, 1), DataType.FLOAT32)
-
             interpreter?.run(arrayOf(inputArray), outputBuffer.buffer)
-            // 이거 잘 봐야 함
+            val output = outputBuffer.floatArray
 
-            val result = outputBuffer.floatArray[0]
-            Log.d(TAG, "ML 예측 결과: $result")
-            result
+            // 모델 출력값 (0.0 = 피싱, 1.0 = 정상)
+            val legitimateProb = output[0]
+            
+            // 피싱 확률로 변환 (1 - 정상확률 = 피싱확률)
+            val phishingProb = 1.0f - legitimateProb
+
+            Log.d(TAG, "모델 출력 (정상 확률): $legitimateProb")
+            Log.d(TAG, "피싱 확률: ${(phishingProb * 100).toInt()}%")
+
+            phishingProb
 
         } catch (e: Exception) {
             Log.e(TAG, "ML 예측 실패", e)
@@ -143,6 +150,32 @@ class TFLitePhishingPredictor(private val context: Context) {
 
         Log.d(TAG, "입력 피처 배열: ${inputArray.joinToString(", ")}")
         return inputArray
+    }
+
+    /**
+     * 코사인 유사도 계산
+     */
+    private fun cosineSimilarity(a: FloatArray, b: FloatArray): Float {
+        if (a.size != b.size) return 0.0f
+
+        var dotProduct = 0.0f
+        var normA = 0.0f
+        var normB = 0.0f
+
+        for (i in a.indices) {
+            dotProduct += a[i] * b[i]
+            normA += a[i] * a[i]
+            normB += b[i] * b[i]
+        }
+
+        normA = kotlin.math.sqrt(normA)
+        normB = kotlin.math.sqrt(normB)
+
+        return if (normA > 0.0f && normB > 0.0f) {
+            dotProduct / (normA * normB)
+        } else {
+            0.0f
+        }
     }
 
     /**
