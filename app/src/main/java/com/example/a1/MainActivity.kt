@@ -728,7 +728,7 @@ class MainActivity : AppCompatActivity() {
         private const val NO_URL_WARNING_KEY = "__NO_URL__"
         private const val DEFAULT_CAMERA_HINT = "QR을 비추면 위협 URL이 여기에 나타납니다"
         // 디버그용으로 자동 분석할 URL (예: "https://phish.example.com"), 주석 해제 후 값 입력
-        private const val DEBUG_AUTO_LAUNCH_URL = "https://interfaithco.com/\t"
+        private const val DEBUG_AUTO_LAUNCH_URL = "https://www.velocidrone.com/"
     }
 
     private fun maybeLaunchDebugUrl() {
