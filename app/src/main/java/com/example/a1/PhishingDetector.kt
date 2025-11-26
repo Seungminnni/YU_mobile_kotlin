@@ -19,6 +19,7 @@ class PhishingDetector(private val context: Context) {
     }
 
     fun analyzePhishing(features: WebFeatures, currentUrl: String?): PhishingAnalysisResult {
+        Log.d(TAG, "analyzePhishing() 호출됨 - 피처 수: ${features.size}, URL: $currentUrl")
         val riskReasons = mutableListOf<String>()
 
         // Basic heuristics for explainability (keeps MainActivity clean from rules map)
@@ -34,10 +35,12 @@ class PhishingDetector(private val context: Context) {
         }
 
         // Ask ML model for a prediction
+        Log.d(TAG, "ML 모델 예측 호출 시작")
         val mlScoreFloat = runCatching { predictor.predictWithML(features) }.getOrElse {
             Log.w(TAG, "ML prediction failed, falling back to heuristics", it)
             -1.0f
         }
+        Log.d(TAG, "ML 모델 예측 완료: $mlScoreFloat")
 
         val (confidenceScore, isPhishing) = if (mlScoreFloat >= 0f) {
             // Ensure normalized value 0..1

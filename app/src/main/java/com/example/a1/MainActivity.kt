@@ -87,6 +87,7 @@ class MainActivity : AppCompatActivity() {
     private var isAnalyzingFeatures = false
     private var lastWarningShownForUrl: String? = null
     private lateinit var phishingDetector: PhishingDetector
+    private lateinit var webFeatureExtractor: WebFeatureExtractor
 
     private val requiredPermissions: Array<String> by lazy {
         val list = mutableListOf(Manifest.permission.CAMERA)
@@ -203,14 +204,16 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        WebView.setWebContentsDebuggingEnabled(false)
+        WebView.setWebContentsDebuggingEnabled(true)  // Enable for debugging
 
         // JavaScript 인터페이스 추가 (피처 추출용)
-        webView.addJavascriptInterface(WebFeatureExtractor { features ->
+        webFeatureExtractor = WebFeatureExtractor { features ->
+            Log.d(TAG, "WebFeatureExtractor 콜백 수신됨, 피처 수: ${features.size}")
             runOnUiThread {
                 analyzeAndDisplayPhishingResult(features)
             }
-        }, "Android")
+        }
+        webView.addJavascriptInterface(webFeatureExtractor, "Android")
 
         // WebViewClient 설정 - 가상환경 내에서만 동작하도록 제한
         webView.webViewClient = object : WebViewClient() {
@@ -246,16 +249,24 @@ class MainActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
+                Log.d(TAG, "onPageFinished() 호출됨 - URL: $url")
                 if (!url.isNullOrBlank()) {
                     currentUrl = url
                 }
 
+                Log.d(TAG, "JS 활성화 상태: ${webView.settings.javaScriptEnabled}")
+                Log.d(TAG, "shouldAnalyzeUrl 결과: ${url != null && shouldAnalyzeUrl(url)}")
+
                 // 피처 추출 실행 (JavaScript 활성화된 경우에만)
                 if (webView.settings.javaScriptEnabled && url != null && shouldAnalyzeUrl(url)) {
+                    Log.d(TAG, "피처 추출 시작")
                     resultTextView.text = "🔍 가상환경에서 피처 분석 중..."
                     extractWebFeatures()
                 } else if (!webView.settings.javaScriptEnabled) {
+                    Log.d(TAG, "JS가 비활성화되어 피처 추출 불가")
                     resultTextView.text = "🔒 보안 모드: 피처 분석을 위해 JavaScript가 필요합니다"
+                } else {
+                    Log.d(TAG, "피처 추출 조건 미충족")
                 }
             }
 
@@ -316,6 +327,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchSandbox(url: String) {
+        Log.d(TAG, "launchSandbox() 호출됨 - URL: $url")
         pendingDetectedUrl = null
         isWebViewVisible = true
         currentUrl = url
@@ -529,16 +541,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun extractWebFeatures() {
+        Log.d(TAG, "extractWebFeatures() 호출됨 - URL: $currentUrl")
         isAnalyzingFeatures = true
-        val extractor = WebFeatureExtractor { features ->
-            runOnUiThread {
-                analyzeAndDisplayPhishingResult(features)
-            }
+        // Use the already-registered webFeatureExtractor instance's script
+        // The JS will call Android.receiveFeatures() which routes to our stored instance
+        val script = webFeatureExtractor.getFeatureExtractionScript()
+        Log.d(TAG, "JS 스크립트 실행 요청")
+        webView.evaluateJavascript(script) { result ->
+            Log.d(TAG, "evaluateJavascript 완료, result=$result")
         }
-        webView.evaluateJavascript(extractor.getFeatureExtractionScript(), null)
     }
 
     private fun analyzeAndDisplayPhishingResult(features: WebFeatures) {
+        Log.d(TAG, "analyzeAndDisplayPhishingResult() 호출됨, 피처 수: ${features.size}")
         // Merge dynamic runtime redirect counters into the feature map so ML sees real behaviour
         val merged = features.toMutableMap()
         try {
@@ -692,13 +707,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun shouldAnalyzeUrl(url: String): Boolean {
+        Log.d(TAG, "shouldAnalyzeUrl() - url=$url, isAnalyzing=$isAnalyzingFeatures, lastKey=$lastAnalyzedPageKey")
         if (url.isBlank() || url.equals("about:blank", ignoreCase = true)) {
+            Log.d(TAG, "shouldAnalyzeUrl: URL이 비어있거나 about:blank")
             return false
         }
         if (isAnalyzingFeatures) {
+            Log.d(TAG, "shouldAnalyzeUrl: 이미 분석 중")
             return false
         }
         if (lastAnalyzedPageKey != null && lastAnalyzedPageKey == url) {
+            Log.d(TAG, "shouldAnalyzeUrl: 이미 분석한 URL")
             return false
         }
         return true
@@ -713,15 +732,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun maybeLaunchDebugUrl() {
-        if (!BuildConfig.DEBUG) return
-        if (DEBUG_AUTO_LAUNCH_URL.isBlank()) return
-        previewView.post {
+        Log.d(TAG, "maybeLaunchDebugUrl() 호출됨")
+        // 테스트를 위해 DEBUG 체크 제거
+        if (DEBUG_AUTO_LAUNCH_URL.isBlank()) {
+            Log.d(TAG, "DEBUG_AUTO_LAUNCH_URL이 비어있음")
+            return
+        }
+        // previewView.post 대신 Handler로 약간의 딜레이 후 실행
+        webView.postDelayed({
             val url = DEBUG_AUTO_LAUNCH_URL.trim()
+            Log.d(TAG, "디버그 URL 로딩 시작: $url")
             cameraHintText.text = "디버그 URL 자동 분석 중..."
             currentUrl = url
             showUrlSuggestion(url)
             launchSandbox(url)
-        }
+        }, 500)
     }
 }
 

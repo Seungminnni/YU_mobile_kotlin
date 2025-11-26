@@ -148,8 +148,7 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                         features.nb_subdomains = 3;
                     }
 
-                    features.prefix_suffix = /https?:\/\/[^
-                    \-]+\-[^\-]+\//.test(url) ? 1 : 0;
+                    features.prefix_suffix = /https?:\/\/[^\-]+\-[^\-]+\//.test(url) ? 1 : 0;
                     features.random_domain = (domainLabel && domainLabel.length >= 5 && (domainLabel.replace(/[aeiou]/gi,'').length / domainLabel.length) > 0.6) ? 1 : 0;
 
                     var shortenerHosts = ['bit.ly','tinyurl.com','t.co','goo.gl','ow.ly','is.gd','s.id','rebrand.ly','buff.ly','cutt.ly','lnkd.in'];
