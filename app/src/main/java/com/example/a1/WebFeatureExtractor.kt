@@ -69,24 +69,48 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     }
 
                     var url = window.location.href;
-                    var hostLower = window.location.hostname.toLowerCase();
+                    var hostname = window.location.hostname;
+                    var hostLower = hostname.toLowerCase();
                     var pathLower = window.location.pathname.toLowerCase();
                     var hostParts = hostLower.split('.');
                     var subdomainPart = hostParts.length > 2 ? hostParts.slice(0, hostParts.length - 2).join('.') : '';
                     var domainLabel = hostParts.length > 1 ? hostParts[hostParts.length - 2] : hostLower;
                     var tld = hostParts.length > 0 ? hostParts[hostParts.length - 1] : '';
+                    var domainWithTld = domainLabel + '.' + tld;
 
+                    // Python words_raw_extraction 로직 정확히 재현:
+                    // w_domain = domain만 split (예: "velocidrone")
+                    // w_subdomain = subdomain만 split (예: "www")
+                    // w_path = path만 split (예: "/page/something" -> "page", "something")
+                    // raw_words = w_domain + w_path + w_subdomain (순서 중요!)
+                    // w_host = w_domain + w_subdomain
                     var splitRegex = /[\-\.\/\?\=\@\&\%\:\_]/;
-                    var urlForWords = window.location.hostname + window.location.pathname + window.location.search;
-                    var urlWords = urlForWords.split(splitRegex).filter(function(w){ return w && w.length > 0; });
-                    var hostWords = window.location.hostname.split(splitRegex).filter(function(w){ return w && w.length > 0; });
-                    var pathWords = (window.location.pathname + window.location.search).split(splitRegex).filter(function(w){ return w && w.length > 0; });
+                    
+                    // domain label만 분리 (예: "velocidrone" -> ["velocidrone"])
+                    var w_domain = domainLabel.split(splitRegex).filter(function(w){ return w && w.length > 0; });
+                    
+                    // subdomain만 분리 (예: "www" -> ["www"], "mail.corp" -> ["mail", "corp"])
+                    var w_subdomain = subdomainPart.split(splitRegex).filter(function(w){ return w && w.length > 0; });
+                    
+                    // path만 분리 (TLD 이후 부분, "/" 포함)
+                    // Python: pth[2] = "/" 다음의 경로 부분
+                    var pathAfterTld = window.location.pathname + window.location.search;
+                    var w_path = pathAfterTld.split(splitRegex).filter(function(w){ return w && w.length > 0; });
+                    
+                    // Python: raw_words = w_domain + w_path + w_subdomain (이 순서!)
+                    var urlWords = w_domain.concat(w_path).concat(w_subdomain);
+                    
+                    // Python: w_host = w_domain + w_subdomain
+                    var hostWords = w_domain.concat(w_subdomain);
+                    
+                    // pathWords는 w_path와 동일
+                    var pathWords = w_path;
 
                     var features = {};
 
                     features.length_url = url.length;
-                    features.length_hostname = window.location.hostname.length;
-                    features.ip = /^(\d{1,3}\.){3}\d{1,3}$/.test(window.location.hostname) ? 1 : 0;
+                    features.length_hostname = hostname.length;
+                    features.ip = /^(\d{1,3}\.){3}\d{1,3}$/.test(hostname) ? 1 : 0;
                     features.nb_dots = (url.match(/\./g) || []).length;
                     features.nb_hyphens = (url.match(/-/g) || []).length;
                     features.nb_at = (url.match(/@/g) || []).length;
@@ -132,7 +156,7 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.http_in_path = pathLower.includes('http') ? 1 : 0;
                     features.https_token = window.location.protocol === 'https:' ? 0 : 1;
                     features.ratio_digits_url = (url.match(/\d/g) || []).length / Math.max(url.length, 1);
-                    features.ratio_digits_host = (window.location.hostname.match(/\d/g) || []).length / Math.max(window.location.hostname.length, 1);
+                    features.ratio_digits_host = (hostname.match(/\d/g) || []).length / Math.max(hostname.length, 1);
                     features.punycode = (url.startsWith('http://xn--') || url.startsWith('https://xn--')) ? 1 : 0;
                     features.port = /^[a-z][a-z0-9+\-.]*:\/\/([a-z0-9\-._~%!$&'()*+,;=]+@)?([a-z0-9\-._~%]+|\[[a-z0-9\-._~%!$&'()*+,;=:]+\]):([0-9]+)/.test(url) ? 1 : 0;
                     features.tld_in_path = pathLower.indexOf(tld) !== -1 ? 1 : 0;
@@ -219,20 +243,29 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     }
                     features.phish_hints = phishHintCount;
 
-                    var brandKeywords = ['paypal','naver','apple','bank','google','microsoft','kakao','facebook','instagram','amazon','ebay','netflix','samsung'];
-                    features.domain_in_brand = brandKeywords.includes(domainLabel) ? 1 : 0;
+                    // Brand keywords list - matching Python's allbrands.txt common entries
+                    var brandKeywords = ['paypal','naver','apple','bank','google','microsoft','kakao','facebook','instagram','amazon','ebay','netflix','samsung','yahoo','linkedin','twitter','chase','wellsfargo','citibank','americanexpress','discover','capitalone','usbank','pnc','dropbox','icloud','outlook','office365','adobe','spotify','steam','epic','nintendo','playstation','xbox'];
+                    
+                    // domain_in_brand: Check if the main domain label is a brand name
+                    features.domain_in_brand = brandKeywords.includes(domainLabel.toLowerCase()) ? 1 : 0;
 
+                    // brand_in_subdomain: Check if any brand appears in subdomain but NOT in the domain itself
+                    // Python: if '.'+b+'.' in path and b not in domain
                     features.brand_in_subdomain = 0;
                     for (var b = 0; b < brandKeywords.length; b++) {
-                        if (subdomainPart.indexOf('.' + brandKeywords[b] + '.') !== -1) {
+                        var brand = brandKeywords[b];
+                        if (subdomainPart.toLowerCase().indexOf(brand) !== -1 && domainLabel.toLowerCase() !== brand) {
                             features.brand_in_subdomain = 1;
                             break;
                         }
                     }
 
+                    // brand_in_path: Check if any brand appears in path but NOT in the domain itself  
+                    // Python: if '.'+b+'.' in path and b not in domain (actually checks subdomain arg which is path)
                     features.brand_in_path = 0;
                     for (var b = 0; b < brandKeywords.length; b++) {
-                        if (pathLower.indexOf('.' + brandKeywords[b] + '.') !== -1) {
+                        var brand = brandKeywords[b];
+                        if (pathLower.indexOf(brand) !== -1 && domainLabel.toLowerCase() !== brand) {
                             features.brand_in_path = 1;
                             break;
                         }
@@ -242,28 +275,53 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.suspecious_tld = suspiciousTlds.includes(tld) ? 1 : 0;
                     features.statistical_report = 0;
 
+                    // nb_hyperlinks: Count all elements with href or src attribute (matching Python)
                     var allHrefElements = document.querySelectorAll('[href]');
                     var allSrcElements = document.querySelectorAll('[src]');
                     features.nb_hyperlinks = allHrefElements.length + allSrcElements.length;
 
+                    // Anchor analysis - categorize into safe (external), unsafe (#/javascript/mailto), internal
                     var anchors = Array.prototype.slice.call(document.querySelectorAll('a[href]'));
-                    var totalAnchors = anchors.length;
-                    var internalCount = 0;
-                    var externalCount = 0;
-                    var nullCount = 0;
+                    var anchorSafe = [];      // external links (safe category in Python)
+                    var anchorUnsafe = [];    // #, javascript:, mailto: links
+                    var anchorInternal = [];  // internal links
+                    var anchorNull = [];      // truly null/empty
+                    
                     for (var a = 0; a < anchors.length; a++) {
                         var href = anchors[a].getAttribute('href');
-                        if (!href || href.trim() === '' || href.startsWith('#') || href.toLowerCase().startsWith('javascript:')) {
-                            nullCount++;
+                        if (!href || href.trim() === '') {
+                            anchorNull.push(href);
                             continue;
                         }
+                        
+                        var hrefLower = href.toLowerCase().trim();
+                        // Check for unsafe patterns (Python: "#" in href or "javascript" in href or "mailto" in href)
+                        if (hrefLower.startsWith('#') || hrefLower.startsWith('javascript:') || hrefLower.startsWith('mailto:')) {
+                            anchorUnsafe.push(href);
+                            continue;
+                        }
+                        
+                        // Try to parse URL
                         var n = normalizeUrl(href);
                         if (!n || !n.hostname) {
-                            nullCount++;
+                            // Relative URL - count as internal
+                            anchorInternal.push(href);
                             continue;
                         }
-                        if (n.hostname === window.location.hostname) internalCount++; else externalCount++;
+                        
+                        // Check if internal or external
+                        if (n.hostname === hostname || hostLower.indexOf(n.hostname.toLowerCase()) !== -1 || n.hostname.toLowerCase().indexOf(domainLabel) !== -1) {
+                            anchorInternal.push(href);
+                        } else {
+                            anchorSafe.push(href);  // External = safe in Python terminology
+                        }
                     }
+                    
+                    var totalAnchors = anchors.length;
+                    var internalCount = anchorInternal.length;
+                    var externalCount = anchorSafe.length;
+                    var nullCount = anchorNull.length + anchorUnsafe.length;  // null includes unsafe for ratio calculation
+                    
                     features.ratio_intHyperlinks = totalAnchors === 0 ? 0 : (internalCount / totalAnchors);
                     features.ratio_extHyperlinks = totalAnchors === 0 ? 0 : (externalCount / totalAnchors);
                     features.ratio_nullHyperlinks = totalAnchors === 0 ? 0 : (nullCount / totalAnchors);
@@ -274,7 +332,7 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                         var cssHref = cssLinks[ci].getAttribute('href');
                         if (cssHref) {
                             var cssUrl = normalizeUrl(cssHref);
-                            if (cssUrl && cssUrl.hostname && cssUrl.hostname !== window.location.hostname) {
+                            if (cssUrl && cssUrl.hostname && cssUrl.hostname !== hostname) {
                                 extCSSCount++;
                             }
                         }
@@ -291,11 +349,11 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     var hasPhpForm = false;
                     for (var i = 0; i < forms.length; i++) {
                         var action = (forms[i].getAttribute('action') || '').trim();
-                        if (!action || action === '' || action === '#' || action === 'about:blank' || action.startsWith('javascript:')) {
+                        if (!action || action === '' || action === '#' || action === 'about:blank' || action.toLowerCase().startsWith('javascript:')) {
                             hasExternalOrNullForm = true;
                         } else if (action.indexOf('http') === 0) {
                             var formUrl = normalizeUrl(action);
-                            if (formUrl && formUrl.hostname && formUrl.hostname !== window.location.hostname) {
+                            if (formUrl && formUrl.hostname && formUrl.hostname !== hostname) {
                                 hasExternalOrNullForm = true;
                             }
                         }
@@ -309,9 +367,9 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     var hasExternalFavicon = false;
                     for (var fi = 0; fi < faviconLinks.length; fi++) {
                         var faviHref = faviconLinks[fi].getAttribute('href');
-                        if (faviHref && faviHref.indexOf('http') === 0) {
+                        if (faviHref) {
                             var favUrl = normalizeUrl(faviHref);
-                            if (favUrl && favUrl.hostname && favUrl.hostname !== window.location.hostname) {
+                            if (favUrl && favUrl.hostname && favUrl.hostname !== hostname) {
                                 hasExternalFavicon = true;
                                 break;
                             }
@@ -319,6 +377,7 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     }
                     features.external_favicon = hasExternalFavicon ? 1 : 0;
 
+                    // links_in_tags: Percentage of internal <link> tags (Python: Link dict)
                     var linkElements = document.querySelectorAll('link[href]');
                     var internalLinks = 0;
                     var externalLinks = 0;
@@ -326,103 +385,141 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                         var linkHref = linkElements[li].getAttribute('href');
                         if (!linkHref) continue;
                         var linkUrl = normalizeUrl(linkHref);
-                        if (!linkUrl || !linkUrl.hostname) continue;
-                        if (linkUrl.hostname === window.location.hostname) internalLinks++; else externalLinks++;
+                        if (!linkUrl || !linkUrl.hostname) {
+                            // Relative URL = internal
+                            internalLinks++;
+                            continue;
+                        }
+                        if (linkUrl.hostname === hostname) internalLinks++; else externalLinks++;
                     }
                     var totalLinks = internalLinks + externalLinks;
                     features.links_in_tags = totalLinks === 0 ? 0 : ((internalLinks / totalLinks) * 100);
 
+                    // submit_email: Check if any form submits to email
                     var hasEmailSubmit = false;
                     for (var i = 0; i < forms.length; i++) {
                         var action = (forms[i].getAttribute('action') || '').toLowerCase();
                         if (action.indexOf('mailto:') !== -1 || action.indexOf('mail()') !== -1) {
                             hasEmailSubmit = true;
-                        } else {
-                            hasEmailSubmit = false;
+                            break;
                         }
-                        break;
                     }
                     features.submit_email = hasEmailSubmit ? 1 : 0;
 
-                    var mediaEls = Array.prototype.slice.call(document.querySelectorAll('img, video, audio, source'));
-                    var totalMedia = mediaEls.length;
+                    // Media analysis (img, video, audio, embed, iframe sources)
+                    var mediaEls = Array.prototype.slice.call(document.querySelectorAll('img[src], video[src], audio[src], embed[src], iframe[src]'));
+                    var totalMedia = 0;
                     var internalMedia = 0;
                     var externalMedia = 0;
                     for (var m = 0; m < mediaEls.length; m++) {
-                        var src = mediaEls[m].getAttribute('src') || mediaEls[m].getAttribute('data-src');
+                        var src = mediaEls[m].getAttribute('src');
                         if (!src) continue;
+                        totalMedia++;
                         var nm = normalizeUrl(src);
-                        if (!nm || !nm.hostname) continue;
-                        if (nm.hostname === window.location.hostname) internalMedia++; else externalMedia++;
+                        if (!nm || !nm.hostname) {
+                            // Relative = internal
+                            internalMedia++;
+                            continue;
+                        }
+                        if (nm.hostname === hostname) internalMedia++; else externalMedia++;
                     }
                     features.ratio_intMedia = totalMedia === 0 ? 0 : ((internalMedia / totalMedia) * 100);
                     features.ratio_extMedia = totalMedia === 0 ? 0 : ((externalMedia / totalMedia) * 100);
 
-                    var unsafeForms = 0;
+                    // sfh (Server Form Handler): 1 if any form has null/external action
+                    var nullFormCount = 0;
                     for (var f = 0; f < forms.length; f++) {
-                        var action = forms[f].getAttribute('action') || '';
-                        var trimmed = action.trim().toLowerCase();
-                        if (!trimmed || trimmed === '#' || trimmed === 'about:blank' || trimmed.startsWith('javascript:')) {
-                            unsafeForms++; continue;
-                        }
-                        if (trimmed.indexOf('http') === 0) {
-                            var urlA = normalizeUrl(trimmed);
-                            if (urlA && urlA.hostname && urlA.hostname !== window.location.hostname) unsafeForms++;
+                        var action = (forms[f].getAttribute('action') || '').trim();
+                        if (!action || action === '' || action === '#' || action === 'about:blank' || action.toLowerCase().startsWith('javascript:')) {
+                            nullFormCount++;
                         }
                     }
-                    features.sfh = forms.length === 0 ? 0 : (unsafeForms / forms.length);
+                    features.sfh = nullFormCount > 0 ? 1 : 0;
 
+                    // iframe: Check for invisible iframes (width=0, height=0, frameborder=0)
                     var iframes = document.getElementsByTagName('iframe');
                     var invisibleIframeCount = 0;
                     for (var ifi = 0; ifi < iframes.length; ifi++) {
                         var iframe = iframes[ifi];
-                        var width = iframe.getAttribute('width') || iframe.width || '';
-                        var height = iframe.getAttribute('height') || iframe.height || '';
-                        var border = iframe.getAttribute('frameborder') || iframe.getAttribute('border') || '';
+                        var width = iframe.getAttribute('width') || '';
+                        var height = iframe.getAttribute('height') || '';
+                        var frameborder = iframe.getAttribute('frameborder') || '';
+                        var border = iframe.getAttribute('border') || '';
                         var style = iframe.getAttribute('style') || '';
-                        if ((width === '0' || width === 0) && (height === '0' || height === 0)) {
+                        
+                        // Python checks: width="0" AND height="0" AND frameborder="0"
+                        if (width === '0' && height === '0' && frameborder === '0') {
                             invisibleIframeCount++;
                         }
-                        if (border === '0' && style.indexOf('border:none') !== -1 && (width === '0' || height === '0')) {
+                        // Also check border attribute
+                        if (width === '0' && height === '0' && border === '0') {
+                            invisibleIframeCount++;
+                        }
+                        // Also check style with border:none
+                        if (width === '0' && height === '0' && style.replace(/\s/g,'').indexOf('border:none') !== -1) {
                             invisibleIframeCount++;
                         }
                     }
                     features.iframe = invisibleIframeCount > 0 ? 1 : 0;
 
+                    // popup_window: Check for prompt() in scripts
                     var hasPopup = false;
-                    var scripts = document.getElementsByTagName('script');
-                    for (var si = 0; si < scripts.length && !hasPopup; si++) {
-                        var scriptContent = scripts[si].textContent || '';
-                        if (scriptContent.indexOf('prompt(') !== -1) hasPopup = true;
+                    var bodyText = (document.body && document.body.innerText) ? document.body.innerText.toLowerCase() : '';
+                    if (bodyText.indexOf('prompt(') !== -1) hasPopup = true;
+                    if (!hasPopup) {
+                        var scripts = document.getElementsByTagName('script');
+                        for (var si = 0; si < scripts.length && !hasPopup; si++) {
+                            var scriptContent = scripts[si].textContent || '';
+                            if (scriptContent.toLowerCase().indexOf('prompt(') !== -1) hasPopup = true;
+                        }
                     }
                     features.popup_window = hasPopup ? 1 : 0;
 
-                    var safeAnchors = externalCount;
-                    var unsafeAnchors = nullCount;
-                    var totalForSafe = safeAnchors + unsafeAnchors;
-                    features.safe_anchor = totalForSafe === 0 ? 0 : ((unsafeAnchors / totalForSafe) * 100);
+                    // safe_anchor: Percentage of unsafe anchors out of (safe + unsafe)
+                    // Python: unsafe / (safe + unsafe) * 100
+                    // safe = external anchors, unsafe = anchors with #/javascript:/mailto:
+                    var safeAnchorTotal = anchorSafe.length + anchorUnsafe.length;
+                    features.safe_anchor = safeAnchorTotal === 0 ? 0 : ((anchorUnsafe.length / safeAnchorTotal) * 100);
 
-                    var hasOnmouseover = (document.querySelectorAll('[onmouseover]').length > 0);
-                    if (!hasOnmouseover && document.body) {
-                        hasOnmouseover = document.body.innerHTML.toLowerCase().indexOf('onmouseover="window.status=') !== -1;
+                    // onmouseover: Check for window.status manipulation
+                    var hasOnmouseover = false;
+                    var bodyHtml = (document.body && document.body.innerHTML) ? document.body.innerHTML.toLowerCase().replace(/\s/g,'') : '';
+                    if (bodyHtml.indexOf('onmouseover="window.status=') !== -1 || bodyHtml.indexOf("onmouseover='window.status=") !== -1) {
+                        hasOnmouseover = true;
                     }
                     features.onmouseover = hasOnmouseover ? 1 : 0;
 
+                    // right_clic: Check for event.button == 2 (right click disable)
                     var hasRightClick = false;
-                    if (document.body && document.body.oncontextmenu) hasRightClick = true;
-                    if (document.querySelectorAll('[oncontextmenu]').length > 0) hasRightClick = true;
-                    if (document.body && document.body.innerHTML.match(/event\.button\s*==\s*2/)) hasRightClick = true;
+                    var bodyHtmlForRightClick = (document.body && document.body.innerHTML) ? document.body.innerHTML : '';
+                    if (/event\.button\s*==\s*2/.test(bodyHtmlForRightClick)) hasRightClick = true;
                     features.right_clic = hasRightClick ? 1 : 0;
 
-                    features.empty_title = (document.title.trim() === '') ? 1 : 0;
+                    // empty_title
+                    features.empty_title = (!document.title || document.title.trim() === '') ? 1 : 0;
 
-                    var titleLower = document.title.toLowerCase();
-                    var mainDomain = hostParts.length >= 2 ? hostParts[hostParts.length - 2] : hostParts[0];
-                    features.domain_in_title = (titleLower.indexOf(mainDomain) !== -1) ? 0 : 1;
+                    // domain_in_title: 0 if domain is in title, 1 otherwise
+                    var titleLower = (document.title || '').toLowerCase();
+                    features.domain_in_title = (titleLower.indexOf(domainLabel) !== -1) ? 0 : 1;
 
-                    var bodyTextForCopy = (document.body && document.body.innerText) ? document.body.innerText.toLowerCase() : '';
-                    var hasCopyright = (bodyTextForCopy.indexOf('©') !== -1 || bodyTextForCopy.indexOf('copyright') !== -1);
-                    features.domain_with_copyright = (hasCopyright && bodyTextForCopy.indexOf(mainDomain) !== -1) ? 0 : 1;
+                    // domain_with_copyright: Check if domain appears near copyright symbol
+                    // Python: finds ©/™/® then checks if domain in surrounding 50 chars
+                    var bodyTextForCopy = (document.body && document.body.innerText) ? document.body.innerText : '';
+                    var copyrightMatch = bodyTextForCopy.match(/[\u00A9\u2122\u00AE]|copyright/i);
+                    if (copyrightMatch) {
+                        var matchIndex = bodyTextForCopy.toLowerCase().search(/[\u00A9\u2122\u00AE]|copyright/i);
+                        if (matchIndex !== -1) {
+                            var start = Math.max(0, matchIndex - 50);
+                            var end = Math.min(bodyTextForCopy.length, matchIndex + 50);
+                            var copyrightContext = bodyTextForCopy.substring(start, end).toLowerCase();
+                            features.domain_with_copyright = (copyrightContext.indexOf(domainLabel) !== -1) ? 0 : 1;
+                        } else {
+                            features.domain_with_copyright = 0;
+                        }
+                    } else {
+                        // No copyright symbol found - Python returns 0 in except block
+                        features.domain_with_copyright = 0;
+                    }
 
                     Android.receiveFeatures(JSON.stringify(features));
                 } catch (e) {

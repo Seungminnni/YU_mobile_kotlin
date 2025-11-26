@@ -15,7 +15,7 @@ class PhishingDetector(private val context: Context) {
 
     companion object {
         private const val TAG = "PhishingDetector"
-        private const val ML_THRESHOLD = 0.5f
+        private const val ML_THRESHOLD = 0.55f
     }
 
     fun analyzePhishing(features: WebFeatures, currentUrl: String?): PhishingAnalysisResult {
