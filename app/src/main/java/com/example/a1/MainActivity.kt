@@ -617,8 +617,6 @@ class MainActivity : AppCompatActivity() {
                 append("• URL 길이: ${features["length_url"]?.toInt() ?: 0}\n")
                 append("• iframe (invisible?) flag: ${features["iframe"]?.toInt() ?: 0}\n")
                 append("• 로그인/외부 폼 (login_form): ${if (features["login_form"] == 1.0f) "있음" else "없음"}\n")
-                append("• 외부 파비콘 (external_favicon): ${if (features["external_favicon"] == 1.0f) "있음" else "없음"}\n")
-                append("• 하이퍼링크 수 (nb_hyperlinks): ${features["nb_hyperlinks"]?.toInt() ?: 0}\n")
                 append("• 외부 CSS 파일 수 (nb_extCSS): ${features["nb_extCSS"]?.toInt() ?: 0}\n")
                 append("• 총 리다이렉션 (nb_redirection): ${features["nb_redirection"]?.toInt() ?: 0} / 외부 리다이렉션: ${features["nb_external_redirection"]?.toInt() ?: 0}\n")
                 append("• 의심 키워드 수 (phish_hints): ${features["phish_hints"]?.toInt() ?: 0}\n")
@@ -749,4 +747,3 @@ class MainActivity : AppCompatActivity() {
         }, 500)
     }
 }
-

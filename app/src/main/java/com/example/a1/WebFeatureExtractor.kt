@@ -275,57 +275,6 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     features.suspecious_tld = suspiciousTlds.includes(tld) ? 1 : 0;
                     features.statistical_report = 0;
 
-                    // nb_hyperlinks: Count all elements with href or src attribute (matching Python)
-                    var allHrefElements = document.querySelectorAll('[href]');
-                    var allSrcElements = document.querySelectorAll('[src]');
-                    features.nb_hyperlinks = allHrefElements.length + allSrcElements.length;
-
-                    // Anchor analysis - categorize into safe (external), unsafe (#/javascript/mailto), internal
-                    var anchors = Array.prototype.slice.call(document.querySelectorAll('a[href]'));
-                    var anchorSafe = [];      // external links (safe category in Python)
-                    var anchorUnsafe = [];    // #, javascript:, mailto: links
-                    var anchorInternal = [];  // internal links
-                    var anchorNull = [];      // truly null/empty
-                    
-                    for (var a = 0; a < anchors.length; a++) {
-                        var href = anchors[a].getAttribute('href');
-                        if (!href || href.trim() === '') {
-                            anchorNull.push(href);
-                            continue;
-                        }
-                        
-                        var hrefLower = href.toLowerCase().trim();
-                        // Check for unsafe patterns (Python: "#" in href or "javascript" in href or "mailto" in href)
-                        if (hrefLower.startsWith('#') || hrefLower.startsWith('javascript:') || hrefLower.startsWith('mailto:')) {
-                            anchorUnsafe.push(href);
-                            continue;
-                        }
-                        
-                        // Try to parse URL
-                        var n = normalizeUrl(href);
-                        if (!n || !n.hostname) {
-                            // Relative URL - count as internal
-                            anchorInternal.push(href);
-                            continue;
-                        }
-                        
-                        // Check if internal or external
-                        if (n.hostname === hostname || hostLower.indexOf(n.hostname.toLowerCase()) !== -1 || n.hostname.toLowerCase().indexOf(domainLabel) !== -1) {
-                            anchorInternal.push(href);
-                        } else {
-                            anchorSafe.push(href);  // External = safe in Python terminology
-                        }
-                    }
-                    
-                    var totalAnchors = anchors.length;
-                    var internalCount = anchorInternal.length;
-                    var externalCount = anchorSafe.length;
-                    var nullCount = anchorNull.length + anchorUnsafe.length;  // null includes unsafe for ratio calculation
-                    
-                    features.ratio_intHyperlinks = totalAnchors === 0 ? 0 : (internalCount / totalAnchors);
-                    features.ratio_extHyperlinks = totalAnchors === 0 ? 0 : (externalCount / totalAnchors);
-                    features.ratio_nullHyperlinks = totalAnchors === 0 ? 0 : (nullCount / totalAnchors);
-
                     var cssLinks = document.querySelectorAll('link[rel="stylesheet"]');
                     var extCSSCount = 0;
                     for (var ci = 0; ci < cssLinks.length; ci++) {
@@ -363,38 +312,6 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                     }
                     features.login_form = (hasExternalOrNullForm || hasPhpForm) ? 1 : 0;
 
-                    var faviconLinks = document.querySelectorAll('link[rel*="icon"]');
-                    var hasExternalFavicon = false;
-                    for (var fi = 0; fi < faviconLinks.length; fi++) {
-                        var faviHref = faviconLinks[fi].getAttribute('href');
-                        if (faviHref) {
-                            var favUrl = normalizeUrl(faviHref);
-                            if (favUrl && favUrl.hostname && favUrl.hostname !== hostname) {
-                                hasExternalFavicon = true;
-                                break;
-                            }
-                        }
-                    }
-                    features.external_favicon = hasExternalFavicon ? 1 : 0;
-
-                    // links_in_tags: Percentage of internal <link> tags (Python: Link dict)
-                    var linkElements = document.querySelectorAll('link[href]');
-                    var internalLinks = 0;
-                    var externalLinks = 0;
-                    for (var li = 0; li < linkElements.length; li++) {
-                        var linkHref = linkElements[li].getAttribute('href');
-                        if (!linkHref) continue;
-                        var linkUrl = normalizeUrl(linkHref);
-                        if (!linkUrl || !linkUrl.hostname) {
-                            // Relative URL = internal
-                            internalLinks++;
-                            continue;
-                        }
-                        if (linkUrl.hostname === hostname) internalLinks++; else externalLinks++;
-                    }
-                    var totalLinks = internalLinks + externalLinks;
-                    features.links_in_tags = totalLinks === 0 ? 0 : ((internalLinks / totalLinks) * 100);
-
                     // submit_email: Check if any form submits to email
                     var hasEmailSubmit = false;
                     for (var i = 0; i < forms.length; i++) {
@@ -405,26 +322,6 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                         }
                     }
                     features.submit_email = hasEmailSubmit ? 1 : 0;
-
-                    // Media analysis (img, video, audio, embed, iframe sources)
-                    var mediaEls = Array.prototype.slice.call(document.querySelectorAll('img[src], video[src], audio[src], embed[src], iframe[src]'));
-                    var totalMedia = 0;
-                    var internalMedia = 0;
-                    var externalMedia = 0;
-                    for (var m = 0; m < mediaEls.length; m++) {
-                        var src = mediaEls[m].getAttribute('src');
-                        if (!src) continue;
-                        totalMedia++;
-                        var nm = normalizeUrl(src);
-                        if (!nm || !nm.hostname) {
-                            // Relative = internal
-                            internalMedia++;
-                            continue;
-                        }
-                        if (nm.hostname === hostname) internalMedia++; else externalMedia++;
-                    }
-                    features.ratio_intMedia = totalMedia === 0 ? 0 : ((internalMedia / totalMedia) * 100);
-                    features.ratio_extMedia = totalMedia === 0 ? 0 : ((externalMedia / totalMedia) * 100);
 
                     // sfh (Server Form Handler): 1 if any form has null/external action
                     var nullFormCount = 0;
@@ -474,12 +371,6 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
                         }
                     }
                     features.popup_window = hasPopup ? 1 : 0;
-
-                    // safe_anchor: Percentage of unsafe anchors out of (safe + unsafe)
-                    // Python: unsafe / (safe + unsafe) * 100
-                    // safe = external anchors, unsafe = anchors with #/javascript:/mailto:
-                    var safeAnchorTotal = anchorSafe.length + anchorUnsafe.length;
-                    features.safe_anchor = safeAnchorTotal === 0 ? 0 : ((anchorUnsafe.length / safeAnchorTotal) * 100);
 
                     // onmouseover: Check for window.status manipulation
                     var hasOnmouseover = false;

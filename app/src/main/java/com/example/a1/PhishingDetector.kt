@@ -25,7 +25,6 @@ class PhishingDetector(private val context: Context) {
         // Basic heuristics for explainability (keeps MainActivity clean from rules map)
         runCatching {
             if (features["shortening_service"] == 1.0f) riskReasons.add("단축 URL 서비스 감지")
-            if (features["external_favicon"] == 1.0f) riskReasons.add("외부 파비콘")
             if (features["login_form"] == 1.0f) riskReasons.add("로그인/외부 폼 감지")
             if ((features["nb_redirection"] ?: 0f) >= 3f) riskReasons.add("다수의 리다이렉션 감지")
             if (features["suspecious_tld"] == 1.0f) riskReasons.add("의심스러운 최상위 도메인")

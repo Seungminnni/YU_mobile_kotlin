@@ -142,9 +142,15 @@ class TFLitePhishingPredictor(private val context: Context) {
      * WebFeatures를 모델이 기대하는 float array로 변환
      */
     private fun webFeaturesToFloatArray(features: WebFeatures): FloatArray {
-        // 모델이 기대하는 피처 순서대로 배열 생성
-        val inputArray = FloatArray(featureColumns.size)
-        for (i in featureColumns.indices) {
+        val expectedSize = if (inputShape.isNotEmpty()) inputShape.last() else featureColumns.size
+        if (featureColumns.size != expectedSize) {
+            Log.w(TAG, "feature_columns(${featureColumns.size}) != model expected size($expectedSize); padding/trim with zeros")
+        }
+
+        val inputArray = FloatArray(expectedSize)
+        val fillCount = minOf(featureColumns.size, expectedSize)
+
+        for (i in 0 until fillCount) {
             val featureName = featureColumns[i]
             val v = features[featureName]
             inputArray[i] = when {
