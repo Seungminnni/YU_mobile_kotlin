@@ -55,6 +55,7 @@
     "brand_in_subdomain",
     "brand_in_path",
     "suspecious_tld",
+    "statistical_report",
     "nb_extCSS",
     "ratio_intRedirection",
     "ratio_extRedirection",
@@ -72,7 +73,7 @@
     "domain_with_copyright"
   ],
   "input_shape": [
-    70
+    71
   ],
   "normalization_layer": "norm_all"
 }
