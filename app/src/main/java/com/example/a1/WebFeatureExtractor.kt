@@ -273,7 +273,8 @@ class WebFeatureExtractor(private val callback: (WebFeatures) -> Unit) {
 
                     var suspiciousTlds = ['fit','tk','gp','ga','work','ml','date','wang','men','icu','online','click','xyz','top','zip','country','stream','download','xin','racing','jetzt','ren','mom','party','review','trade','accountants','science','ninja','faith','cricket','win','accountant','realtor','christmas','gdn','link','asia','club','la','ae','exposed','pe','rs','audio','website','bj','mx','media'];
                     features.suspecious_tld = suspiciousTlds.includes(tld) ? 1 : 0;
-                    features.statistical_report = 0;
+                    // statistical_report is resolved natively (DNS/IP lookup) on Android side
+                    features.statistical_report = null;
 
                     var cssLinks = document.querySelectorAll('link[rel="stylesheet"]');
                     var extCSSCount = 0;

@@ -45,6 +45,7 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import java.net.InetAddress
 import java.net.URI
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -71,6 +72,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sandboxInfoPanel: View
     private lateinit var exitSandboxButton: Button
 
+    private val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private var currentUrl: String? = null
     // dynamic, runtime counters to capture actual WebView redirect behaviour
     private var dynamicTotalRedirects: Int = 0
@@ -452,6 +454,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        analysisExecutor.shutdown()
         cameraExecutor.shutdown()
         barcodeScanner.close()
     }
@@ -554,46 +557,90 @@ class MainActivity : AppCompatActivity() {
 
     private fun analyzeAndDisplayPhishingResult(features: WebFeatures) {
         Log.d(TAG, "analyzeAndDisplayPhishingResult() 호출됨, 피처 수: ${features.size}")
-        // Merge dynamic runtime redirect counters into the feature map so ML sees real behaviour
-        val merged = features.toMutableMap()
-        try {
-            // override counts that JS might set or leave null
-            merged["nb_redirection"] = dynamicTotalRedirects.toFloat()
-            merged["nb_external_redirection"] = dynamicExternalRedirects.toFloat()
-            if (dynamicTotalRedirects == 0) {
-                merged["ratio_intRedirection"] = 0f
-                merged["ratio_extRedirection"] = 0f
-            } else {
-                val internal = (dynamicTotalRedirects - dynamicExternalRedirects)
-                merged["ratio_intRedirection"] = (internal.toFloat() / dynamicTotalRedirects.toFloat())
-                merged["ratio_extRedirection"] = (dynamicExternalRedirects.toFloat() / dynamicTotalRedirects.toFloat())
-            }
-        } catch (e: Exception) {
-            Log.d(TAG, "Failed to merge dynamic redirect counters", e)
-        }
+        val urlForAnalysis = currentUrl
+        val redirectsSnapshot = dynamicTotalRedirects
+        val externalRedirectsSnapshot = dynamicExternalRedirects
+        val errorsSnapshot = dynamicTotalErrors
+        val externalErrorsSnapshot = dynamicExternalErrors
 
-        Log.d(TAG, "dynamic redirects total=$dynamicTotalRedirects external=$dynamicExternalRedirects | errors total=$dynamicTotalErrors external=$dynamicExternalErrors")
-
-            // merge dynamic error counters as well (overwrite any JS-provided values)
+        analysisExecutor.execute {
             try {
-                merged["nb_errors"] = dynamicTotalErrors.toFloat()
-                merged["nb_external_errors"] = dynamicExternalErrors.toFloat()
-                if (dynamicTotalErrors == 0) {
-                    merged["ratio_intErrors"] = 0f
-                    merged["ratio_extErrors"] = 0f
-                } else {
-                    val internalErrors = (dynamicTotalErrors - dynamicExternalErrors)
-                    merged["ratio_intErrors"] = internalErrors.toFloat() / dynamicTotalErrors.toFloat()
-                    merged["ratio_extErrors"] = dynamicExternalErrors.toFloat() / dynamicTotalErrors.toFloat()
+                val merged = features.toMutableMap()
+                try {
+                    merged["nb_redirection"] = redirectsSnapshot.toFloat()
+                    merged["nb_external_redirection"] = externalRedirectsSnapshot.toFloat()
+                    if (redirectsSnapshot == 0) {
+                        merged["ratio_intRedirection"] = 0f
+                        merged["ratio_extRedirection"] = 0f
+                    } else {
+                        val internal = (redirectsSnapshot - externalRedirectsSnapshot)
+                        merged["ratio_intRedirection"] = internal.toFloat() / redirectsSnapshot.toFloat()
+                        merged["ratio_extRedirection"] = externalRedirectsSnapshot.toFloat() / redirectsSnapshot.toFloat()
+                    }
+                } catch (e: Exception) {
+                    Log.d(TAG, "Failed to merge dynamic redirect counters", e)
+                }
+
+                try {
+                    merged["nb_errors"] = errorsSnapshot.toFloat()
+                    merged["nb_external_errors"] = externalErrorsSnapshot.toFloat()
+                    if (errorsSnapshot == 0) {
+                        merged["ratio_intErrors"] = 0f
+                        merged["ratio_extErrors"] = 0f
+                    } else {
+                        val internalErrors = (errorsSnapshot - externalErrorsSnapshot)
+                        merged["ratio_intErrors"] = internalErrors.toFloat() / errorsSnapshot.toFloat()
+                        merged["ratio_extErrors"] = externalErrorsSnapshot.toFloat() / errorsSnapshot.toFloat()
+                    }
+                } catch (e: Exception) {
+                    Log.d(TAG, "Failed to merge dynamic error counters", e)
+                }
+
+                val statValue = computeStatisticalReport(urlForAnalysis)
+                if (statValue != null) {
+                    merged["statistical_report"] = statValue
+                }
+
+                val statValue = computeStatisticalReport(urlForAnalysis)
+                if (statValue != null) {
+                    merged["statistical_report"] = statValue
+                }
+
+                Log.d(TAG, "dynamic redirects total=$redirectsSnapshot external=$externalRedirectsSnapshot | errors total=$errorsSnapshot external=$externalErrorsSnapshot")
+
+                val analysisResult = phishingDetector.analyzePhishing(merged, urlForAnalysis)
+                runOnUiThread {
+                    isAnalyzingFeatures = false
+                    lastAnalyzedPageKey = analysisResult.inspectedUrl ?: urlForAnalysis
+                    renderAnalysis(analysisResult)
                 }
             } catch (e: Exception) {
-                Log.d(TAG, "Failed to merge dynamic error counters", e)
+                Log.e(TAG, "Failed to analyze phishing features", e)
+                runOnUiThread {
+                    isAnalyzingFeatures = false
+                    Toast.makeText(this, "분석 중 오류가 발생했습니다", Toast.LENGTH_SHORT).show()
+                }
             }
+        }
+    }
 
-            val analysisResult = phishingDetector.analyzePhishing(merged, currentUrl)
-        isAnalyzingFeatures = false
-        lastAnalyzedPageKey = analysisResult.inspectedUrl ?: currentUrl
-        renderAnalysis(analysisResult)
+    private fun computeStatisticalReport(url: String?): Float? {
+        if (url.isNullOrBlank()) return null
+
+        val lowerUrl = url.lowercase(Locale.ROOT)
+        if (STATISTICAL_REPORT_DOMAINS.any { lowerUrl.contains(it) }) {
+            return 1f
+        }
+
+        val host = runCatching { URI(url).host }.getOrNull() ?: return 2f
+        val normalizedHost = host.trim().trimStart('[').trimEnd(']')
+        return try {
+            val ip = InetAddress.getByName(normalizedHost).hostAddress ?: return 2f
+            if (STATISTICAL_REPORT_IPS.contains(ip)) 1f else 0f
+        } catch (e: Exception) {
+            Log.d(TAG, "statistical_report DNS lookup 실패: $normalizedHost", e)
+            2f
+        }
     }
 
     private fun renderAnalysis(analysisResult: PhishingAnalysisResult, allowModal: Boolean = true) {
@@ -727,6 +774,79 @@ class MainActivity : AppCompatActivity() {
         private const val DEFAULT_CAMERA_HINT = "QR을 비추면 위협 URL이 여기에 나타납니다"
         // 디버그용으로 자동 분석할 URL (예: "https://phish.example.com"), 주석 해제 후 값 입력
         private const val DEBUG_AUTO_LAUNCH_URL = "https://www.velocidrone.com/"
+        private val STATISTICAL_REPORT_DOMAINS = setOf(
+            "at.ua",
+            "usa.cc",
+            "baltazarpresentes.com.br",
+            "pe.hu",
+            "esy.es",
+            "hol.es",
+            "sweddy.com",
+            "myjino.ru",
+            "96.lt",
+            "ow.ly"
+        )
+        private val STATISTICAL_REPORT_IPS = setOf(
+            "146.112.61.108",
+            "213.174.157.151",
+            "121.50.168.88",
+            "192.185.217.116",
+            "78.46.211.158",
+            "181.174.165.13",
+            "46.242.145.103",
+            "121.50.168.40",
+            "83.125.22.219",
+            "46.242.145.98",
+            "107.151.148.44",
+            "107.151.148.107",
+            "64.70.19.203",
+            "199.184.144.27",
+            "107.151.148.108",
+            "107.151.148.109",
+            "119.28.52.61",
+            "54.83.43.69",
+            "52.69.166.231",
+            "216.58.192.225",
+            "118.184.25.86",
+            "67.208.74.71",
+            "23.253.126.58",
+            "104.239.157.210",
+            "175.126.123.219",
+            "141.8.224.221",
+            "10.10.10.10",
+            "43.229.108.32",
+            "103.232.215.140",
+            "69.172.201.153",
+            "216.218.185.162",
+            "54.225.104.146",
+            "103.243.24.98",
+            "199.59.243.120",
+            "31.170.160.61",
+            "213.19.128.77",
+            "62.113.226.131",
+            "208.100.26.234",
+            "195.16.127.102",
+            "195.16.127.157",
+            "34.196.13.28",
+            "103.224.212.222",
+            "172.217.4.225",
+            "54.72.9.51",
+            "192.64.147.141",
+            "198.200.56.183",
+            "23.253.164.103",
+            "52.48.191.26",
+            "52.214.197.72",
+            "87.98.255.18",
+            "209.99.17.27",
+            "216.38.62.18",
+            "104.130.124.96",
+            "47.89.58.141",
+            "54.86.225.156",
+            "54.82.156.19",
+            "37.157.192.102",
+            "204.11.56.48",
+            "110.34.231.42"
+        )
     }
 
     private fun maybeLaunchDebugUrl() {
